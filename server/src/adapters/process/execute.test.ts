@@ -77,6 +77,9 @@ describe("process adapter execute", () => {
     for (const script of [
       `console.log("PAPERCLIP_FINAL {not-json}");`,
       `console.log("PAPERCLIP_FINAL " + JSON.stringify("array"));`,
+      `console.log("PAPERCLIP_FINAL {}")`,
+      `console.log('PAPERCLIP_FINAL {"text":5}');`,
+      `console.log("PAPERCLIP_FINAL " + JSON.stringify(["x"]));`,
       `console.log('PAPERCLIP_FINAL {"text":""}');`,
       `console.log('PAPERCLIP_FINAL {"text":"   "}');`,
       `console.log("PAPERCLIP_FINAL");`,
