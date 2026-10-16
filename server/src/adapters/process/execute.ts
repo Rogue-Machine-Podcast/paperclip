@@ -16,6 +16,7 @@ import {
   resolveCommandForLogs,
   runChildProcess,
 } from "../utils.js";
+import { readStdoutMarkedFinalResponse } from "./final-response-marker.js";
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   let spawned = false;
@@ -124,13 +125,19 @@ async function executeProcess(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   }
 
+  const resultJson: Record<string, unknown> = {
+    stdout: proc.stdout,
+    stderr: proc.stderr,
+  };
+  const markedFinal = readStdoutMarkedFinalResponse(proc.stdout);
+  if (markedFinal) {
+    resultJson.finalResponse = markedFinal;
+  }
+
   return {
     exitCode: proc.exitCode,
     signal: proc.signal,
     timedOut: false,
-    resultJson: {
-      stdout: proc.stdout,
-      stderr: proc.stderr,
-    },
+    resultJson,
   };
 }
