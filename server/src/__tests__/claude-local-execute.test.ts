@@ -1920,3 +1920,86 @@ describe("claude execute", () => {
     }
   });
 });
+
+async function writeLingeringClaudeCommand(
+  commandPath: string,
+  options: { resultEvent: Record<string, unknown> },
+): Promise<void> {
+  const payload = JSON.stringify(options.resultEvent);
+  const script = `#!/usr/bin/env node
+process.on("SIGTERM", () => process.exit(143));
+console.log(${JSON.stringify(payload)});
+setInterval(() => {}, 1000);
+`;
+  await fs.writeFile(commandPath, script, "utf8");
+  await fs.chmod(commandPath, 0o755);
+}
+
+describe("claude execute terminal-result cleanup", () => {
+  async function runLingering(resultEvent: Record<string, unknown>) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-lingering-"));
+    const { workspace, commandPath, restore } = await setupExecuteEnv(root, {
+      commandWriter: (commandPath) => writeLingeringClaudeCommand(commandPath, { resultEvent }),
+    });
+    try {
+      return await execute({
+        runId: "run-lingering",
+        agent: { id: "agent-1", companyId: "co-1", name: "Test", adapterType: "claude_local", adapterConfig: { engine: "cli" } },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: {
+          engine: "cli",
+          command: commandPath,
+          cwd: workspace,
+          promptTemplate: "Do work.",
+          terminalResultCleanupGraceMs: 0,
+        },
+        context: {},
+        authToken: "tok",
+        onLog: async () => {},
+      });
+    } finally {
+      restore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("reports a successful result as exit 0 when cleanup stops a leftover background task", async () => {
+    const result = await runLingering({
+      type: "result",
+      subtype: "success",
+      session_id: "11111111-1111-4111-8111-111111111111",
+      is_error: false,
+      result: "done",
+      usage: { input_tokens: 1, cache_read_input_tokens: 0, output_tokens: 1 },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.errorMessage).toBeNull();
+    expect(result.resultJson?.unmanagedBackgroundTask).toEqual({
+      kind: "terminal_result_cleanup",
+      stopped: true,
+      stopReason: "unmanaged_background_task_stopped",
+      reason: "unmanaged background task stopped; no durable live path",
+      terminalResultSeen: true,
+      signal: "SIGTERM",
+      forceKilled: false,
+      processExitCode: 143,
+      processSignal: null,
+    });
+  });
+
+  it("keeps an error result failed when cleanup stops a leftover background task", async () => {
+    const result = await runLingering({
+      type: "result",
+      subtype: "error_during_execution",
+      session_id: "11111111-1111-4111-8111-111111111111",
+      is_error: true,
+      result: "boom",
+      usage: { input_tokens: 1, cache_read_input_tokens: 0, output_tokens: 1 },
+    });
+
+    expect(result.exitCode).toBe(143);
+    expect(result.errorMessage).toBe("Claude run failed: subtype=error_during_execution: boom");
+  });
+});
