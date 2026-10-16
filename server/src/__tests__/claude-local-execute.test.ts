@@ -1923,12 +1923,14 @@ describe("claude execute", () => {
 
 async function writeLingeringClaudeCommand(
   commandPath: string,
-  options: { resultEvent: Record<string, unknown> },
+  options: { resultEvent: Record<string, unknown>; exitOnSigterm?: boolean },
 ): Promise<void> {
   const payload = JSON.stringify(options.resultEvent);
+  const sigtermHandler = options.exitOnSigterm === false
+    ? ""
+    : `process.on("SIGTERM", () => process.exit(143));\n`;
   const script = `#!/usr/bin/env node
-process.on("SIGTERM", () => process.exit(143));
-console.log(${JSON.stringify(payload)});
+${sigtermHandler}console.log(${JSON.stringify(payload)});
 setInterval(() => {}, 1000);
 `;
   await fs.writeFile(commandPath, script, "utf8");
@@ -1936,10 +1938,11 @@ setInterval(() => {}, 1000);
 }
 
 describe("claude execute terminal-result cleanup", () => {
-  async function runLingering(resultEvent: Record<string, unknown>) {
+  async function runLingering(resultEvent: Record<string, unknown>, options?: { exitOnSigterm?: boolean }) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-exec-lingering-"));
     const { workspace, commandPath, restore } = await setupExecuteEnv(root, {
-      commandWriter: (commandPath) => writeLingeringClaudeCommand(commandPath, { resultEvent }),
+      commandWriter: (commandPath) =>
+        writeLingeringClaudeCommand(commandPath, { resultEvent, exitOnSigterm: options?.exitOnSigterm }),
     });
     try {
       return await execute({
@@ -2001,5 +2004,54 @@ describe("claude execute terminal-result cleanup", () => {
 
     expect(result.exitCode).toBe(143);
     expect(result.errorMessage).toBe("Claude run failed: subtype=error_during_execution: boom");
+  });
+
+  it("reports a successful result as exit 0 when cleanup kills the process by signal", async () => {
+    const result = await runLingering(
+      {
+        type: "result",
+        subtype: "success",
+        session_id: "11111111-1111-4111-8111-111111111111",
+        is_error: false,
+        result: "done",
+      },
+      { exitOnSigterm: false },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.signal).toBeNull();
+    expect(result.resultJson?.unmanagedBackgroundTask).toMatchObject({
+      processExitCode: null,
+      processSignal: "SIGTERM",
+    });
+  });
+
+  it("keeps the signal for a non-success result without is_error", async () => {
+    const result = await runLingering(
+      {
+        type: "result",
+        subtype: "error_during_execution",
+        session_id: "11111111-1111-4111-8111-111111111111",
+        result: "boom",
+      },
+      { exitOnSigterm: false },
+    );
+
+    expect(result.exitCode).toBeNull();
+    expect(result.signal).toBe("SIGTERM");
+  });
+
+  it("keeps the signal for a result without a subtype", async () => {
+    const result = await runLingering(
+      {
+        type: "result",
+        session_id: "11111111-1111-4111-8111-111111111111",
+        result: "done",
+      },
+      { exitOnSigterm: false },
+    );
+
+    expect(result.exitCode).toBeNull();
+    expect(result.signal).toBe("SIGTERM");
   });
 });

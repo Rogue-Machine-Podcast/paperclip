@@ -1160,8 +1160,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const failed = !parsedSucceeded && ((proc.exitCode ?? 0) !== 0 || parsedIsError);
     // After a terminal result, runChildProcess stops the process group so a
     // leftover background shell cannot hold the run open. That signal, not
-    // Claude, sets the exit status, so a finished run reports a clean exit.
-    const stoppedAfterResult = !failed && proc.terminalResultCleanup != null;
+    // Claude, sets the exit status, so a successful run reports a clean exit.
+    const stoppedAfterResult = parsedSucceeded && proc.terminalResultCleanup != null;
     // Validate-before-persist guard: never persist a sessionId whose transcript
     // is known-poisoned. The Claude CLI keeps an on-disk JSONL keyed by the
     // session id; if the last entry contains a non-`msg_`-prefixed
