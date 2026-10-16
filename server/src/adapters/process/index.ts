@@ -22,5 +22,8 @@ Core fields:
 Operational fields:
 - timeoutSec (number, optional): run timeout in seconds
 - graceSec (number, optional): SIGTERM grace period in seconds
+
+Final user-facing response (successful exit only):
+- Print a single stdout line \`PAPERCLIP_FINAL {"text":"..."}\` as the last non-empty line when the process should supply durable run prose. Paperclip maps it to \`resultJson.finalResponse\` with \`disposition: "final"\`. Malformed markers are ignored; stdout and stderr are stored unchanged.
 `,
 };
