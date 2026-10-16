@@ -1158,6 +1158,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const parsedSubtype = asString(parsed.subtype, "").trim().toLowerCase();
     const parsedSucceeded = parsedSubtype === "success" && !parsedIsError;
     const failed = !parsedSucceeded && ((proc.exitCode ?? 0) !== 0 || parsedIsError);
+    // After a terminal result, runChildProcess stops the process group so a
+    // leftover background shell cannot hold the run open. That signal, not
+    // Claude, sets the exit status, so a successful run reports a clean exit.
+    const stoppedAfterResult = parsedSucceeded && proc.terminalResultCleanup != null;
     // Validate-before-persist guard: never persist a sessionId whose transcript
     // is known-poisoned. The Claude CLI keeps an on-disk JSONL keyed by the
     // session id; if the last entry contains a non-`msg_`-prefixed
@@ -1258,12 +1262,20 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ...(transientRetryNotBefore ? { retryNotBefore: transientRetryNotBefore.toISOString() } : {}),
       ...(transientRetryNotBefore ? { transientRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
       ...(providerQuota && transientRetryNotBefore ? { providerQuotaRetryNotBefore: transientRetryNotBefore.toISOString() } : {}),
-      ...(proc.terminalResultCleanup ? { unmanagedBackgroundTask: proc.terminalResultCleanup } : {}),
+      ...(proc.terminalResultCleanup
+        ? {
+          unmanagedBackgroundTask: {
+            ...proc.terminalResultCleanup,
+            processExitCode: proc.exitCode,
+            processSignal: proc.signal,
+          },
+        }
+        : {}),
     };
 
     return {
-      exitCode: proc.exitCode,
-      signal: proc.signal,
+      exitCode: stoppedAfterResult ? 0 : proc.exitCode,
+      signal: stoppedAfterResult ? null : proc.signal,
       timedOut: false,
       usageComplete: parsedStream.resultJson !== null || parsed.type === "result",
       errorMessage,
