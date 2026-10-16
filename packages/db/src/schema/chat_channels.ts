@@ -32,6 +32,7 @@ import { agents } from "./agents.js";
 import { companies } from "./companies.js";
 import { issueComments } from "./issue_comments.js";
 import { issues } from "./issues.js";
+import { projects } from "./projects.js";
 import { toolConnections } from "./tool_access.js";
 
 export const chatEndpoints = pgTable(
@@ -42,6 +43,7 @@ export const chatEndpoints = pgTable(
       .notNull()
       .references(() => companies.id, { onDelete: "cascade" }),
     connectionId: uuid("connection_id").notNull(),
+    defaultProjectId: uuid("default_project_id").references(() => projects.id, { onDelete: "set null" }),
     provider: text("provider").$type<ChatProvider>().notNull(),
     publicId: text("public_id").notNull(),
     publicationMode: text("publication_mode").$type<"automatic" | "explicit">().notNull().default("automatic"),

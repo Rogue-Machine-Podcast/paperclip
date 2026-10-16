@@ -1,0 +1,2 @@
+ALTER TABLE "chat_endpoints" ADD COLUMN "default_project_id" uuid;--> statement-breakpoint
+ALTER TABLE "chat_endpoints" ADD CONSTRAINT "chat_endpoints_default_project_id_projects_id_fk" FOREIGN KEY ("default_project_id") REFERENCES "public"."projects"("id") ON DELETE set null ON UPDATE no action;
