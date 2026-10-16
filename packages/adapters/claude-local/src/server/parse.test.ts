@@ -14,6 +14,52 @@ import {
 } from "./parse.js";
 
 describe("detectClaudeLoginRequired", () => {
+  it("does not classify a successful run whose tool output says unauthorized", () => {
+    // Real false positive: a successful heartbeat whose tool result held an
+    // OpenAPI spec with a 401 "Unauthorized" response raised a reconnect card.
+    const parsed = { is_error: false, subtype: "success", result: "Done." };
+    expect(
+      detectClaudeLoginRequired({
+        parsed,
+        stdout:
+          '{"type":"user","message":{"content":[{"type":"tool_result","content":"\\"401\\": {\\"description\\": \\"Unauthorized\\"}"}]}}\n' +
+          '{"type":"assistant","message":{"content":[{"type":"text","text":"The run failed with Not logged in · Please run /login."}]}}',
+        stderr: "",
+      }).requiresLogin,
+    ).toBe(false);
+  });
+
+  it("does not classify a run without a result from stream-json tool output alone", () => {
+    // A run killed before its result event (exit 143) whose tool output quoted
+    // server code returning 401 unauthorized.
+    expect(
+      detectClaudeLoginRequired({
+        parsed: null,
+        stdout:
+          '{"type":"user","message":{"content":[{"type":"tool_result","content":"return self.reply(401, {\'error\': \'unauthorized\'})"}]}}',
+        stderr: "",
+      }).requiresLogin,
+    ).toBe(false);
+  });
+
+  it("classifies the CLI's own not-logged-in result as login required", () => {
+    // Real CLI output: a synthetic assistant message and an is_error result.
+    const parsed = {
+      is_error: true,
+      subtype: "success",
+      api_error_status: null,
+      result: "Not logged in · Please run /login",
+    };
+    expect(
+      detectClaudeLoginRequired({
+        parsed,
+        stdout:
+          '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"Not logged in · Please run /login"}]}}',
+        stderr: "",
+      }).requiresLogin,
+    ).toBe(true);
+  });
+
   it("classifies Claude's invalid API key login prompt as auth required", () => {
     expect(
       detectClaudeLoginRequired({
