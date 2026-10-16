@@ -153,6 +153,7 @@ import {
   issues,
   invites,
   joinRequests,
+  projects,
   toolApplications,
   toolConnections,
 } from "@paperclipai/db";
@@ -5851,6 +5852,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
       id: endpoint.id,
       companyId: endpoint.companyId,
       connectionId: endpoint.connectionId,
+      defaultProjectId: endpoint.defaultProjectId,
       publicationMode: endpoint.publicationMode,
       externalExecutionPolicy: endpoint.externalExecutionPolicy,
       provider: endpoint.provider,
@@ -6153,6 +6155,19 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
           values.allowUnlinkedPeople = input.allowUnlinkedPeople;
         await db.transaction(async (tx) => {
           await credentialLease.assertOwned(tx);
+          if (input.defaultProjectId !== undefined) {
+            if (input.defaultProjectId !== null) {
+              const [project] = await tx
+                .select({ id: projects.id })
+                .from(projects)
+                .where(and(
+                  eq(projects.id, input.defaultProjectId),
+                  eq(projects.companyId, existing.endpoint.companyId),
+                ));
+              if (!project) throw unprocessable("The selected project does not belong to this company");
+            }
+            values.defaultProjectId = input.defaultProjectId;
+          }
           await tx
             .update(chatEndpoints)
             .set(values)
@@ -16115,6 +16130,7 @@ export function chatChannelService(db: Db, options: ChatChannelServiceOptions) {
               description: `Started from ${PROVIDER_LABELS[endpoint.provider]}: ${resource.label}`,
               status: "todo",
               priority: "medium",
+              projectId: taskEndpoint.defaultProjectId ?? undefined,
               assigneeAgentId: endpoint.assignedAgentId,
               createdByUserId: taskUserId ?? endpoint.sponsorUserId,
               responsibleUserId: taskUserId ?? endpoint.sponsorUserId,

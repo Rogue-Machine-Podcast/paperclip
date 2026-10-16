@@ -88,6 +88,7 @@ export const createChatEndpointSchema = z
 
 export const updateChatEndpointSchema = z
   .object({
+    defaultProjectId: z.string().uuid().nullable().optional(),
     communicationInstructions: multilineTextSchema.pipe(z.string().trim().max(4000)).optional(),
     slackApp: slackAppConfigurationSchema.optional(),
     slackSetupMethod: z.enum(["automatic", "manual", "existing"]).optional(),

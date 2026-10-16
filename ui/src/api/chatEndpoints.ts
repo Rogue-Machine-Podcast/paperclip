@@ -100,6 +100,7 @@ export interface ChatIdentityLinkPreview {
 }
 
 export interface ChatEndpoint {
+  defaultProjectId?: string | null;
   communicationInstructions?: string;
   publicationMode?: "automatic" | "explicit";
   externalExecutionPolicy?: "restricted" | "agent";
