@@ -247,15 +247,17 @@ export function detectClaudeLoginRequired(input: {
   const parsed = input.parsed ?? null;
   const resultText = asString(parsed?.result, "").trim();
 
-  // The legacy login-prompt markers keep their broad scope. They match against
-  // every output line, which includes the parsed result, the parsed errors, and
-  // the raw stdout and stderr.
+  // A successful terminal result proves the CLI authenticated, whatever the run
+  // printed. Otherwise the login-prompt markers match the parsed result, the
+  // parsed errors, stderr, and plain-text stdout. Stream-json stdout lines carry
+  // model and tool content, which routinely contains words like "unauthorized".
+  const succeeded = parsed !== null && !claudeResultIndicatesAuthFailure(parsed);
   const promptLines = [resultText, ...extractClaudeErrorMessages(parsed ?? {}), input.stdout, input.stderr]
     .join("\n")
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean);
-  const loginPrompt = promptLines.some((line) => CLAUDE_LOGIN_PROMPT_RE.test(line));
+    .filter((line) => line && !line.startsWith("{"));
+  const loginPrompt = !succeeded && promptLines.some((line) => CLAUDE_LOGIN_PROMPT_RE.test(line));
 
   // The token-failure markers match only against the parsed terminal fields of
   // a failed run. The raw stdout is untrusted, so a model that prints a token
