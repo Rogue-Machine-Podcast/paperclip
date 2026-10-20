@@ -748,28 +748,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const parsedError = typeof attempt.parsed.errorMessage === "string" ? attempt.parsed.errorMessage.trim() : "";
     const terminalResult = attempt.parsed.terminalResult;
     const parsedIsError = terminalResult?.isError === true;
-    const cleanup = attempt.proc.terminalResultCleanup;
-    const stoppedAfterResult = terminalResult?.subtype === "success"
-      && !parsedIsError && !parsedError && !attempt.proc.errorCode
-      && cleanup != null
-      && (attempt.proc.exitCode === 0
-        || (attempt.proc.signal !== null && attempt.proc.signal === cleanup.signal));
-    const exitCode = stoppedAfterResult ? 0 : parsedIsError && attempt.proc.exitCode === 0
-      ? 1 : attempt.proc.exitCode;
+    const exitCode = parsedIsError && attempt.proc.exitCode === 0 ? 1 : attempt.proc.exitCode;
     const stderrLine = firstCursorDiagnosticLine(attempt.proc.stderr);
     const fallbackErrorMessage =
       parsedError ||
       stderrLine ||
-      `Cursor exited with code ${attempt.proc.exitCode ?? -1}`;
+      (attempt.proc.signal
+        ? `Cursor exited with signal ${attempt.proc.signal}`
+        : `Cursor exited with code ${attempt.proc.exitCode ?? -1}`);
 
     return {
       exitCode,
-      signal: stoppedAfterResult ? null : attempt.proc.signal,
+      signal: attempt.proc.signal,
       timedOut: false,
       usageComplete,
       usageBasis: "per_run",
       errorMessage:
-        parsedIsError || (exitCode ?? 0) !== 0
+        parsedIsError || attempt.proc.signal !== null || (exitCode ?? 0) !== 0
           ? fallbackErrorMessage
           : null,
       // Forward the transport-level error code from the run-disposition seam. A

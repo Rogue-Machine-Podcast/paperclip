@@ -494,14 +494,15 @@ printf '%s\\n' '{"type":"result","subtype":"success","session_id":"cursor-sessio
 
 describe("cursor execute terminal-result cleanup", () => {
   it.skipIf(process.platform === "win32").each([
-    { name: "explicit success after CLI exit with the default grace", event: { type: "result", subtype: "success", result: "done" }, graceMs: undefined, handleTerm: true, parentExitCode: 0, expectedExit: 0, expectedError: null },
-    { name: "explicit success after a signal", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: false, parentExitCode: null, expectedExit: 0, expectedError: null },
-    { name: "success with an earlier nonzero CLI exit", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: true, parentExitCode: 7, expectedExit: 7, expectedError: "Cursor exited with code 7" },
-    { name: "success with a trapped signal exit", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: true, parentExitCode: null, expectedExit: 143, expectedError: "Cursor exited with code 143" },
-    { name: "error result", event: { type: "result", subtype: "error", result: "failed" }, graceMs: 100, handleTerm: true, parentExitCode: null, expectedExit: 143, expectedError: "failed" },
-    { name: "success marked as an error", event: { type: "result", subtype: "success", is_error: true, result: "failed" }, graceMs: 100, handleTerm: true, parentExitCode: null, expectedExit: 143, expectedError: "failed" },
-    { name: "unspecified result status", event: { type: "result", result: "done" }, graceMs: 100, handleTerm: true, parentExitCode: null, expectedExit: 143, expectedError: "Cursor exited with code 143" },
-  ])("stops a background sleep and preserves $name", async ({ event, graceMs, handleTerm, parentExitCode, expectedExit, expectedError }) => {
+    { name: "explicit success after CLI exit with the default grace", event: { type: "result", subtype: "success", result: "done" }, graceMs: undefined, handleTerm: true, parentExitCode: 0, selfSignal: false, expectedSignal: null, expectedExit: 0, expectedError: null },
+    { name: "success when cleanup signals the waiting CLI", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: false, parentExitCode: null, selfSignal: false, expectedSignal: "SIGTERM", expectedExit: null, expectedError: "Cursor exited with signal SIGTERM" },
+    { name: "success when the CLI signals itself before cleanup", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: false, parentExitCode: null, selfSignal: true, expectedSignal: "SIGTERM", expectedExit: null, expectedError: "Cursor exited with signal SIGTERM" },
+    { name: "success with an earlier nonzero CLI exit", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: true, parentExitCode: 7, selfSignal: false, expectedSignal: null, expectedExit: 7, expectedError: "Cursor exited with code 7" },
+    { name: "success with a trapped signal exit", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: true, parentExitCode: null, selfSignal: false, expectedSignal: null, expectedExit: 143, expectedError: "Cursor exited with code 143" },
+    { name: "error result", event: { type: "result", subtype: "error", result: "failed" }, graceMs: 100, handleTerm: true, parentExitCode: null, selfSignal: false, expectedSignal: null, expectedExit: 143, expectedError: "failed" },
+    { name: "success marked as an error", event: { type: "result", subtype: "success", is_error: true, result: "failed" }, graceMs: 100, handleTerm: true, parentExitCode: null, selfSignal: false, expectedSignal: null, expectedExit: 143, expectedError: "failed" },
+    { name: "unspecified result status", event: { type: "result", result: "done" }, graceMs: 100, handleTerm: true, parentExitCode: null, selfSignal: false, expectedSignal: null, expectedExit: 143, expectedError: "Cursor exited with code 143" },
+  ])("stops a background sleep and preserves $name", async ({ event, graceMs, handleTerm, parentExitCode, selfSignal, expectedSignal, expectedExit, expectedError }) => {
     setPrepareCursorSandboxCommand.mockReset();
     setPrepareCursorSandboxCommand.mockImplementation(async (input) => ({
       command: input.command, env: input.env, remoteSystemHomeDir: null,
@@ -518,7 +519,7 @@ background_pid=$!
 printf '%s' "$background_pid" > "$FIXTURE_PID_PATH"
 kill -0 "$background_pid" || exit 99
 printf '%s\\n' "$FIXTURE_RESULT"
-${parentExitCode !== null ? `exit ${parentExitCode}` : 'wait "$background_pid"'}
+${selfSignal ? 'kill -TERM "$$"' : parentExitCode !== null ? `exit ${parentExitCode}` : 'wait "$background_pid"'}
 `, { mode: 0o755 });
     let backgroundPid: number | null = null;
     let aliveAtResult = false;
@@ -546,7 +547,7 @@ ${parentExitCode !== null ? `exit ${parentExitCode}` : 'wait "$background_pid"'}
       expect(elapsedAfterResultMs).toBeLessThan(10_000);
       expect(result.timedOut).toBe(false);
       expect(result.exitCode).toBe(expectedExit);
-      expect(result.signal).toBeNull();
+      expect(result.signal).toBe(expectedSignal);
       expect(result.errorMessage).toBe(expectedError);
       expect(result.resultJson?.unmanagedBackgroundTask).toEqual({
         kind: "terminal_result_cleanup", stopped: true,
@@ -561,7 +562,7 @@ ${parentExitCode !== null ? `exit ${parentExitCode}` : 'wait "$background_pid"'}
       }, { timeout: 1_000, interval: 10 });
       console.info(JSON.stringify({
         fixture: "cursor-background-sleep-600", subtype: event.type === "result" && "subtype" in event ? event.subtype : null,
-        parentExitCode, graceMs: graceMs ?? 5_000, elapsedAfterResultMs,
+        backgroundPid, parentExitCode, selfSignal, graceMs: graceMs ?? 5_000, elapsedAfterResultMs,
         backgroundAliveAtResult: aliveAtResult, backgroundAliveAfterCleanup: false,
         exitCode: result.exitCode, cleanup: result.resultJson?.unmanagedBackgroundTask,
       }));
