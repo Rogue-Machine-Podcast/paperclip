@@ -748,7 +748,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const parsedError = typeof attempt.parsed.errorMessage === "string" ? attempt.parsed.errorMessage.trim() : "";
     const terminalResult = attempt.parsed.terminalResult;
     const parsedIsError = terminalResult?.isError === true;
-    const exitCode = parsedIsError && attempt.proc.exitCode === 0 ? 1 : attempt.proc.exitCode;
+    const parsedSucceeded = terminalResult?.subtype === "success" && !parsedIsError;
+    const stoppedAfterResult = parsedSucceeded && attempt.proc.terminalResultCleanup != null;
+    const exitCode = stoppedAfterResult ? 0 : parsedIsError && attempt.proc.exitCode === 0 ? 1 : attempt.proc.exitCode;
+    const signal = stoppedAfterResult ? null : attempt.proc.signal;
     const stderrLine = firstCursorDiagnosticLine(attempt.proc.stderr);
     const fallbackErrorMessage =
       parsedError ||
@@ -759,12 +762,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
     return {
       exitCode,
-      signal: attempt.proc.signal,
+      signal,
       timedOut: false,
       usageComplete,
       usageBasis: "per_run",
       errorMessage:
-        parsedIsError || attempt.proc.signal !== null || (exitCode ?? 0) !== 0
+        parsedIsError || signal !== null || (exitCode ?? 0) !== 0
           ? fallbackErrorMessage
           : null,
       // Forward the transport-level error code from the run-disposition seam. A
