@@ -68,6 +68,7 @@ export function parseCursorJsonl(stdout: string) {
 export function createCursorJsonlParser() {
   let sessionId: string | null = null;
   let sawResult = false;
+  let terminalResult: { subtype: string; isError: boolean } | null = null;
   let sawLegacyStep = false;
   let usageReported = false;
   let missingUsage = false;
@@ -137,7 +138,9 @@ export function createCursorJsonlParser() {
         );
         addCost(event.total_cost_usd ?? event.cost_usd ?? event.cost);
 
-        const isError = event.is_error === true || asString(event.subtype, "").toLowerCase() === "error";
+        const subtype = asString(event.subtype, "").trim().toLowerCase();
+        const isError = event.is_error === true || subtype === "error";
+        terminalResult = { subtype, isError };
         const resultText = asString(event.result, "").trim();
         if (resultText && messages.length === 0) {
           messages.push(resultText);
@@ -185,6 +188,7 @@ export function createCursorJsonlParser() {
 
     return {
       sawResult,
+      terminalResult,
       sawLegacyStep,
       usageReported,
       usageComplete: usageReported && !missingUsage,
