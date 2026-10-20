@@ -52,6 +52,7 @@ import {
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
   joinPromptSections,
+  type RunProcessResult,
 } from "@paperclipai/adapter-utils/server-utils";
 import { DEFAULT_CURSOR_LOCAL_MODEL, SANDBOX_INSTALL_COMMAND } from "../index.js";
 import { firstCursorDiagnosticLine, parseCursorJsonl, createCursorJsonlParser, isCursorUnknownSessionError } from "./parse.js";
@@ -683,6 +684,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       },
       runLogTail: paperclipBridge?.runLogTail,
       settleRunDisposition: paperclipBridge?.settleRunDisposition,
+      terminalResultCleanup: {
+        graceMs: Math.max(0, asNumber(config.terminalResultCleanupGraceMs, 5_000)),
+        hasTerminalResult: ({ stdout }) => parseCursorJsonl(stdout).sawResult,
+      },
     });
     await flushStdoutChunk("", true);
     await accountingLog.flush();
@@ -697,14 +702,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const toResult = (
     attempt: {
-      proc: {
-        exitCode: number | null;
-        signal: string | null;
-        timedOut: boolean;
-        stdout: string;
-        stderr: string;
-        errorCode?: string | null;
-      };
+      proc: RunProcessResult;
       parsed: ReturnType<typeof parseCursorJsonl>;
     },
     clearSessionOnMissingSession = false,
@@ -748,6 +746,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         } as Record<string, unknown>)
       : null;
     const parsedError = typeof attempt.parsed.errorMessage === "string" ? attempt.parsed.errorMessage.trim() : "";
+    const terminalResult = attempt.parsed.terminalResult;
+    const parsedIsError = terminalResult?.isError === true;
+    const cleanup = attempt.proc.terminalResultCleanup;
+    const stoppedAfterResult = terminalResult?.subtype === "success"
+      && !parsedIsError && !parsedError && !attempt.proc.errorCode
+      && cleanup != null
+      && (attempt.proc.exitCode === 0
+        || (attempt.proc.signal !== null && attempt.proc.signal === cleanup.signal));
+    const exitCode = stoppedAfterResult ? 0 : parsedIsError && attempt.proc.exitCode === 0
+      ? 1 : attempt.proc.exitCode;
     const stderrLine = firstCursorDiagnosticLine(attempt.proc.stderr);
     const fallbackErrorMessage =
       parsedError ||
@@ -755,15 +763,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       `Cursor exited with code ${attempt.proc.exitCode ?? -1}`;
 
     return {
-      exitCode: attempt.proc.exitCode,
-      signal: attempt.proc.signal,
+      exitCode,
+      signal: stoppedAfterResult ? null : attempt.proc.signal,
       timedOut: false,
       usageComplete,
       usageBasis: "per_run",
       errorMessage:
-        (attempt.proc.exitCode ?? 0) === 0
-          ? null
-          : fallbackErrorMessage,
+        parsedIsError || (exitCode ?? 0) !== 0
+          ? fallbackErrorMessage
+          : null,
       // Forward the transport-level error code from the run-disposition seam. A
       // lost duplex control channel surfaces the typed `duplex_channel_lost`
       // code; every other result carries no code here.
@@ -781,6 +789,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       resultJson: {
         stdout: attempt.proc.stdout,
         stderr: attempt.proc.stderr,
+        ...(attempt.proc.terminalResultCleanup
+          ? {
+              unmanagedBackgroundTask: {
+                ...attempt.proc.terminalResultCleanup,
+                processExitCode: attempt.proc.exitCode,
+                processSignal: attempt.proc.signal,
+              },
+            }
+          : {}),
       },
       summary: attempt.parsed.summary,
       clearSession: Boolean(clearSessionOnMissingSession && !resolvedSessionId),
