@@ -806,6 +806,20 @@ function sanitizeBranchName(value: string): string {
     .slice(0, 120) || "paperclip-work";
 }
 
+// Cursor CLI flattens the worktree path into one folder name, and macOS caps a
+// name at 255 bytes. The longest project root here leaves ~60 characters.
+const MAX_DERIVED_BRANCH_NAME_LENGTH = 48;
+const DERIVED_BRANCH_HASH_LENGTH = 8;
+
+function capDerivedBranchName(branchName: string): string {
+  if (branchName.length <= MAX_DERIVED_BRANCH_NAME_LENGTH) return branchName;
+  const hash = createHash("sha256").update(branchName).digest("hex").slice(0, DERIVED_BRANCH_HASH_LENGTH);
+  const head = branchName
+    .slice(0, MAX_DERIVED_BRANCH_NAME_LENGTH - DERIVED_BRANCH_HASH_LENGTH - 1)
+    .replace(/[-/._]+$/g, "");
+  return `${head}-${hash}`;
+}
+
 function isAbsolutePath(value: string) {
   return path.isAbsolute(value) || value.startsWith("~");
 }
@@ -3385,7 +3399,16 @@ export async function realizeExecutionWorkspace(input: {
       projectId: input.base.projectId,
       repoRef: input.base.repoRef,
     });
-    branchName = sanitizeBranchName(renderedBranch);
+    const uncappedBranchName = sanitizeBranchName(renderedBranch);
+    branchName = capDerivedBranchName(uncappedBranchName);
+    if (branchName !== uncappedBranchName) {
+      // Branches created before the cap keep their original name and worktree.
+      const uncappedBranchSha = await runGit(
+        ["rev-parse", "--verify", "--quiet", `refs/heads/${uncappedBranchName}`],
+        repoRoot,
+      ).catch(() => null);
+      if (uncappedBranchSha) branchName = uncappedBranchName;
+    }
   }
   const configuredParentDir = asString(rawStrategy.worktreeParentDir, "");
   const worktreeParentDir = configuredParentDir
