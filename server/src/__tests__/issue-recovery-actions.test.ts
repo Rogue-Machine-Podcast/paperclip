@@ -1833,7 +1833,9 @@ describeEmbeddedPostgres("issue recovery actions", () => {
       executionReconciliation: { runId, providerStopped: true, actionOutcome: "not_performed",
         outcomeEvidence: "Provider receipts confirm the action was never submitted; the stopped process has no remaining effects." } };
     // A retry without new evidence cannot clear the hold or reopen the task.
-    await request(app).post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`).send({ ...body, executionReconciliation: undefined }).expect(200);
+    // It must say so instead of replaying success over the hold.
+    const missing = await request(app).post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`).send({ ...body, executionReconciliation: undefined }).expect(409);
+    expect(missing.body.details).toEqual({ code: "execution_reconciliation_required", actionId: action!.id });
     expect((await db.select().from(issues).where(eq(issues.id, sourceIssueId)))[0]!.status).toBe("blocked");
     const resolved = await request(app).post(`/api/issues/${sourceIssueId}/recovery-actions/resolve`).send(body).expect(200);
     expect(resolved.body.issue.status).toBe("todo");

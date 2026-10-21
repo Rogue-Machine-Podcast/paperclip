@@ -19,7 +19,7 @@ import { retryNativeWorkspaceExport } from "../services/native-runtime/native-wo
 import { queuedInteractionId, readQueuedInteractionResponse, hasQueuedInteractionResponse } from "../services/queued-interaction-response.js";
 import { deliverConversationComments, isConversation } from "../services/agent-conversations.js";
 import { issueRecoveryActionReadModel } from "../services/issue-recovery-actions.js";
-import { getExecutionBlocker } from "../services/execution-blocker.js";
+import { executionBlockerPredicate, getExecutionBlocker } from "../services/execution-blocker.js";
 import { requiresExecutionReconciliation } from "@paperclipai/shared";
 import {
   validateExecutionReconciliation,
@@ -9677,6 +9677,14 @@ export function issueRoutes(
                 .where(eq(issueRecoveryActions.id, settled.id))
                 .returning();
               activeRecoveryAction = issueRecoveryActionReadModel(reopened!);
+            } else if (automatic?.replay === "blocked" && (await tx.select({ id: issueRecoveryActions.id })
+              .from(issueRecoveryActions).where(and(eq(issueRecoveryActions.id, settled.id), executionBlockerPredicate()))
+              .limit(1)).length > 0) {
+              // Replaying success here would hide the hold that still blocks the task.
+              throw conflict(
+                "This recovery action still holds the task blocked. Resend with executionReconciliation { runId, providerStopped: true, actionOutcome, outcomeEvidence } to record what the stopped run did.",
+                { code: "execution_reconciliation_required", actionId: settled.id },
+              );
             } else {
               return {
                 issue: lockedIssue,

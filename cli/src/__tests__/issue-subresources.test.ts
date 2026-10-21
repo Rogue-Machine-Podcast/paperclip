@@ -120,6 +120,41 @@ describe("issue subresource commands", () => {
     ]);
   });
 
+  it("sends execution reconciliation evidence when resolving a no-replay hold", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const dir = await mkdtemp(join(tmpdir(), "paperclip-recovery-"));
+    const evidenceFile = join(dir, "evidence.txt");
+    await writeFile(evidenceFile, "Provider receipts confirm the action was never submitted.");
+
+    try {
+      await run([
+        "issue", "recovery:resolve", ISSUE_ID,
+        "--outcome", "restored",
+        "--source-issue-status", "todo",
+        "--action-id", APPROVAL_ID,
+        "--stopped-run-id", HOLD_ID,
+        "--provider-stopped",
+        "--action-outcome", "not_performed",
+        "--outcome-evidence-file", evidenceFile,
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      actionId: APPROVAL_ID,
+      outcome: "restored",
+      sourceIssueStatus: "todo",
+      executionReconciliation: {
+        runId: HOLD_ID,
+        providerStopped: true,
+        actionOutcome: "not_performed",
+        outcomeEvidence: "Provider receipts confirm the action was never submitted.",
+      },
+    });
+  });
+
   it("wraps document and work product endpoints", async () => {
     const fetchMock = vi
       .fn()
