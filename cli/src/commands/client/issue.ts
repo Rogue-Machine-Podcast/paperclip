@@ -147,6 +147,11 @@ interface IssueRecoveryResolveOptions extends BaseClientOptions {
   outcome: string;
   sourceIssueStatus: string;
   resolutionNote?: string;
+  stoppedRunId?: string;
+  providerStopped?: boolean;
+  actionOutcome?: string;
+  outcomeEvidence?: string;
+  outcomeEvidenceFile?: string;
 }
 
 interface InteractionAcceptOptions extends BaseClientOptions {
@@ -534,14 +539,27 @@ export function registerIssueCommands(program: Command): void {
       .requiredOption("--source-issue-status <status>", "todo, done, or in_review for restored outcomes; blocked is only valid for blocked outcomes")
       .option("--action-id <id>", "Specific recovery action ID")
       .option("--resolution-note <text>", "Resolution note")
+      .option("--stopped-run-id <id>", "Execution reconciliation: the stopped run the evidence covers")
+      .option("--provider-stopped", "Execution reconciliation: confirm the provider process has stopped")
+      .option("--action-outcome <outcome>", "Execution reconciliation: completed, not_performed, or mixed")
+      .option("--outcome-evidence <text>", "Execution reconciliation: what the stopped run did, at least 20 characters")
+      .option("--outcome-evidence-file <path>", "Read execution reconciliation evidence from a file")
       .action(async (issueId: string, opts: IssueRecoveryResolveOptions) => {
         try {
           const ctx = resolveCommandContext(opts);
+          const outcomeEvidence = opts.outcomeEvidenceFile ? await readFile(opts.outcomeEvidenceFile, "utf8") : opts.outcomeEvidence;
+          const reconciling = opts.stoppedRunId || opts.providerStopped || opts.actionOutcome || outcomeEvidence;
           const payload = resolveIssueRecoveryActionSchema.parse({
             actionId: opts.actionId,
             outcome: opts.outcome,
             sourceIssueStatus: opts.sourceIssueStatus,
             resolutionNote: opts.resolutionNote,
+            executionReconciliation: reconciling ? {
+              runId: opts.stoppedRunId,
+              providerStopped: opts.providerStopped,
+              actionOutcome: opts.actionOutcome,
+              outcomeEvidence,
+            } : undefined,
           });
           const result = await ctx.api.post(apiPath`/api/issues/${issueId}/recovery-actions/resolve`, payload);
           printOutput(result, { json: ctx.json });
