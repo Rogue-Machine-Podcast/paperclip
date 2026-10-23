@@ -1,3 +1,4 @@
+import { getExecutionParticipantAvailability } from "./issue-execution-participant-availability.js";
 import { notifyChatPublicationWork } from "./chat-work-notifications.js";
 import { recordChatHandoff, recordChatCompletion, existingChatCompletionReply, acknowledgeChatCompletionReply } from "./chat-completion-delivery.js";
 import { mirrorSlackBoardComment, slackBoardReplyBindings } from "./slack-board-messages.js";
@@ -4780,6 +4781,8 @@ async function listIssueReviewAttentionMap(
     })),
     relations: [],
     agents: agentRows,
+    participantAvailability: (await Promise.all(reviewIssues.map((issue) =>
+      getExecutionParticipantAvailability(dbOrTx as Db, issue)))).filter((facts) => facts !== null),
     activeRuns: activeRunRows,
     queuedWakeRequests: wakeRows,
     pendingInteractions: interactionRows,
@@ -5889,6 +5892,8 @@ async function listIssueBlockedInboxAttentionMap(
     })),
     relations: graphRelations,
     agents: companyAgents,
+    participantAvailability: (await Promise.all(graphIssues.filter((issue) => issue.status === "in_review").map((issue) =>
+      getExecutionParticipantAvailability(dbOrTx as Db, issue)))).filter((facts) => facts !== null),
     activeRuns: (
       activeRunRows as Array<{
         companyId: string;

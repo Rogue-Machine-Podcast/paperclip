@@ -126,6 +126,28 @@ and review run. The server reads these records from saved review state; it does
 not depend on the parent session remembering a separate review session. These
 records are evidence and do not grant permission to resolve another review.
 
+### Unavailable execution-stage participants
+
+A pending agent reviewer or approver is unavailable for an issue when it has no
+active run or queued wake for that issue, no scheduled retry, and either has
+status `error`, `terminated`, or `paused`, or its latest issue run failed or was
+cancelled. A human participant is never unavailable under this rule.
+
+The stage's return assignee or an active task watchdog covering the issue may
+send the stage back with a PATCH containing `status: "in_progress"` and a
+non-empty `comment`. The server assigns the return assignee and preserves the
+same stage in `changes_requested` state. It keeps `changesRequestedCount`
+unchanged because a dispatch failure is not a review round. An explicit assignee
+must match the return assignee. These actors cannot approve or choose another
+status through this path. The active participant and board retain their existing
+decision permissions.
+
+The server rechecks availability under the issue lock and records
+`issue.execution_participant_unavailable_send_back` with the participant, failed
+run, and actor. Review attention excludes an unavailable agent from maintained
+`execution_participant` paths. Pending human confirmations keep their own gates
+and do not prevent this stage send-back or grant approval.
+
 ### Answered Slack conversations
 
 A successful Slack turn with a published final reply and no remaining execution
