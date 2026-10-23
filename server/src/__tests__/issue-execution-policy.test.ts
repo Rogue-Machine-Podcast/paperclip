@@ -2103,3 +2103,82 @@ describe("review round circuit breaker", () => {
     });
   });
 });
+
+describe("unavailable execution participant send-back", () => {
+  const policy = normalizeIssueExecutionPolicy({
+    stages: [{ type: "review", participants: [{ type: "agent", agentId: qaAgentId }] }],
+  })!;
+  const state = {
+    status: "pending", currentStageId: policy.stages[0].id, currentStageIndex: 0,
+    currentStageType: "review", currentParticipant: { type: "agent", agentId: qaAgentId },
+    returnAssignee: { type: "agent", agentId: coderAgentId }, completedStageIds: [],
+    lastDecisionId: null, lastDecisionOutcome: null, changesRequestedCount: 2,
+  };
+  const availability = {
+    companyId: "company-1", issueId: "issue-1", agentId: qaAgentId,
+    agentStatus: "error", hasActiveRun: false, hasQueuedWake: false,
+    latestRun: { id: "failed-run", status: "failed", scheduledRetryAt: null as Date | null },
+  };
+  const input = () => ({
+    issue: { status: "in_review", assigneeAgentId: qaAgentId, executionState: state },
+    policy, actor: { agentId: coderAgentId }, requestedStatus: "in_progress",
+    requestedAssigneePatch: {}, commentBody: "Reviewer failed dispatch. Return for repair.",
+    participantAvailability: availability,
+  });
+
+  it.each([false, true])("sends back for the return assignee or an in-scope watchdog (%s)", (watchdog) => {
+    const result = applyIssueExecutionPolicyTransition({
+      ...input(), actor: { agentId: watchdog ? ctoAgentId : coderAgentId },
+      taskWatchdogScopeAllowed: watchdog,
+    });
+    expect(result.patch).toMatchObject({
+      status: "in_progress", assigneeAgentId: coderAgentId, assigneeUserId: null,
+      executionState: { ...state, status: "changes_requested", lastDecisionOutcome: "changes_requested" },
+    });
+    expect(result.participantUnavailableSendBack).toEqual({ participantAgentId: qaAgentId, failedRunId: "failed-run" });
+    expect(result.workflowControlledAssignment).toBe(true);
+  });
+
+  it("rejects an unrelated agent and explains the permitted send-back", () => {
+    const attempt = () => applyIssueExecutionPolicyTransition({ ...input(), actor: { agentId: ctoAgentId } });
+    expect(attempt).toThrow(/unavailable.*return assignee.*in-scope task watchdog.*in_progress/i);
+    expect(attempt).toThrow(expect.objectContaining({ status: 422 }));
+  });
+
+  it.each([
+    { hasActiveRun: true }, { hasQueuedWake: true },
+    { latestRun: { id: "failed-run", status: "failed", scheduledRetryAt: new Date("2099-01-01") } },
+    { agentStatus: "idle", latestRun: { id: "success-run", status: "succeeded", scheduledRetryAt: null } },
+  ])("rejects send-back while a continuation exists or the participant is healthy (%j)", (facts) => {
+    expect(() => applyIssueExecutionPolicyTransition({ ...input(), participantAvailability: { ...availability, ...facts } }))
+      .toThrow(/Only the active reviewer or approver/);
+  });
+
+  it.each([coderAgentId, ctoAgentId])("cannot approve or choose another status (%s)", (agentId) => {
+    for (const requestedStatus of ["done", "cancelled", "blocked", "todo", "backlog"]) {
+      expect(() => applyIssueExecutionPolicyTransition({
+        ...input(), actor: { agentId }, taskWatchdogScopeAllowed: agentId === ctoAgentId, requestedStatus,
+      })).toThrow(/Only the active reviewer or approver/);
+    }
+  });
+
+  it.each([undefined, "", "   "])("requires a same-request comment (%s)", (commentBody) => {
+    expect(() => applyIssueExecutionPolicyTransition({ ...input(), commentBody })).toThrow(/requires a comment/);
+  });
+
+  it("rejects a different return assignment", () => {
+    expect(() => applyIssueExecutionPolicyTransition({
+      ...input(), requestedAssigneePatch: { assigneeAgentId: ctoAgentId },
+    })).toThrow(/Only the active reviewer or approver/);
+  });
+
+  it("never treats a user participant as unavailable", () => {
+    const userPolicy = normalizeIssueExecutionPolicy({ stages: [{ type: "review", participants: [{ type: "user", userId: ctoUserId }] }] })!;
+    expect(() => applyIssueExecutionPolicyTransition({
+      ...input(), policy: userPolicy,
+      issue: { status: "in_review", assigneeUserId: ctoUserId, executionState: {
+        ...state, currentStageId: userPolicy.stages[0].id, currentParticipant: { type: "user", userId: ctoUserId },
+      } },
+    })).toThrow(/Only the active reviewer or approver/);
+  });
+});
