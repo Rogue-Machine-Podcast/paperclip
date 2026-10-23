@@ -15,7 +15,7 @@ export async function getExecutionParticipantAvailability(db, issue) {
     if (participant?.type !== "agent" || !participant.agentId)
         return null;
     const agentId = participant.agentId;
-    const runIssueId = sql `coalesce(${heartbeatRuns.issueId}::text,
+    const runIssueId = sql `coalesce(${heartbeatRuns.nativeIssueId}::text,
     ${heartbeatRuns.contextSnapshot} ->> 'issueId', ${heartbeatRuns.contextSnapshot} ->> 'taskId')`;
     const wakeIssueId = sql `coalesce(
     ${agentWakeupRequests.payload} ->> 'issueId', ${agentWakeupRequests.payload} ->> 'taskId',

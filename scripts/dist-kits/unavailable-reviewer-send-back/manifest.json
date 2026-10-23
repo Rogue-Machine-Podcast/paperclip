@@ -17,6 +17,6 @@
   },
   "services/issue-execution-participant-availability.js": {
     "original": null,
-    "patched": "4ec6fc9f4549bc88bb3cae341c70568785a1698f1a229bd9ef8c00f59f947668"
+    "patched": "39a3220a449761614845c5d7e9ed968303411df445a83c88329a9448510df627"
   }
 }

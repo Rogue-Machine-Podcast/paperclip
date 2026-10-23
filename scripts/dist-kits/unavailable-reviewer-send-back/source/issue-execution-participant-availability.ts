@@ -29,7 +29,7 @@ export async function getExecutionParticipantAvailability(
   const participant = state?.status === "pending" ? state.currentParticipant : null;
   if (participant?.type !== "agent" || !participant.agentId) return null;
   const agentId = participant.agentId;
-  const runIssueId = sql<string>`coalesce(${heartbeatRuns.issueId}::text,
+  const runIssueId = sql<string>`coalesce(${heartbeatRuns.nativeIssueId}::text,
     ${heartbeatRuns.contextSnapshot} ->> 'issueId', ${heartbeatRuns.contextSnapshot} ->> 'taskId')`;
   const wakeIssueId = sql<string>`coalesce(
     ${agentWakeupRequests.payload} ->> 'issueId', ${agentWakeupRequests.payload} ->> 'taskId',

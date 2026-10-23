@@ -6,6 +6,8 @@ This kit ports [PR 13](https://github.com/Rogue-Machine-Podcast/paperclip/pull/1
 
 Source head: `21fc114c80be0811904f33a8cd0d524fe514e3a2`. Base: `62cc45ca5c0eee7cebddda067d13fb5548d90569`. GitHub records merge commit `2fd0248aa552ad12e6e5084360582f13a18dc5ec`; the port uses the specified PR head. This is a hand port of its hunks onto the pinned live files, not a copy of compiled master.
 
+The availability module adapts one column reference from PR 13. It uses `heartbeatRuns.nativeIssueId` instead of `heartbeatRuns.issueId`, because the installed 2026.1005.0 schema has `native_issue_id` and no `issue_id`. The `context_snapshot` fallbacks for `issueId` and `taskId` are unchanged. This matches the installed wake-queue adapter's run matching. The adapted TypeScript is in `source/`, and both its digest and the emitted JavaScript digest are pinned below.
+
 Default target:
 
 ```text
@@ -83,9 +85,15 @@ python3 check_source.py --tsc /path/to/repository/node_modules/typescript/bin/ts
 
 python3 check_dist.py
 # PASS node --check: 5/5 patched files
+# PASS live-schema SQL: 4/4 queries rendered with installed PgDialect and @paperclipai/db; all interpolated columns defined; no empty interpolation or (::
 # PASS send-back: return assignee and scoped watchdog; status=in_progress; assignee=return; changesRequestedCount=2; failedRunId=failed-run
 # ... required 422 cases, availability helper, liveness paths, and route import ...
 # PASS patched-dist behavior and route import
+
+python3 check_postgres.py --postgres-bin /opt/homebrew/opt/postgresql@17/bin
+# PASS scratch PostgreSQL: 292 installed 2026.1005.0 migrations applied; native_issue_id exists; issue_id absent
+# ... all four queries execute with literal availability assertions ...
+# PASS scratch PostgreSQL stopped; fresh loopback port and verified data directory; live database never connected
 
 python3 check_round_trip.py
 # PASS scratch round trip: original -> patched -> original; 4 originals byte-identical; new file absent
@@ -93,7 +101,11 @@ python3 check_round_trip.py
 # PASS 112 corruption/state/failure checks plus round trip; live install never targeted
 ```
 
-The new module was emitted with the repository's TypeScript 7.0.2 CLI using `--noCheck --noResolve --target es2022 --module esnext`. This proves byte-for-byte syntax emit, not full repository type checking. `check_dist.py` creates a fresh recursive symlink mirror of the installed server, copies in the five pinned candidates, and uses `--preserve-symlinks` so relative imports use mirrored modules. All behavior assertions import the patched JavaScript. The availability query test supplies a query-chain stub. This kit does not run database-backed route integration tests or a full workspace build.
+The new module was emitted with the repository's TypeScript 7.0.2 CLI using `--noCheck --noResolve --target es2022 --module esnext`. This proves byte-for-byte syntax emit, not full repository type checking. `check_dist.py` creates a fresh recursive symlink mirror of the installed server, copies in the five pinned candidates, and uses `--preserve-symlinks` so relative imports use mirrored modules. All behavior assertions import the patched JavaScript.
+
+`check_queries.mjs` captures the helper's four real query builders and renders each with the installed `drizzle-orm` `PgDialect` and `@paperclipai/db`. It rejects undefined predicate interpolations, missing selected columns, and empty SQL interpolations. The regression failed before the column adaptation with `AssertionError: undefined SQL interpolation in availability predicate`. It passes with `nativeIssueId`. The separate policy test keeps its query-chain stub for literal return-value checks.
+
+`check_postgres.py` runs `initdb` in the run-owned scratch directory, starts only that cluster on a fresh loopback port, and stops it in a `finally` block. The query script verifies the server's data directory before it applies the installed database package's migrations. It asserts that `native_issue_id` exists and `issue_id` is absent. It executes all four availability queries and checks native and context run matching, all four wake payload fallbacks, active and queued statuses, retry timestamps, company/agent/issue isolation, and no participant. PostgreSQL 17.11 passed. Pass the directory of another PostgreSQL installation with `--postgres-bin` if needed. This kit does not run database-backed HTTP route integration tests or a full workspace build.
 
 The route import succeeds with the current local environment and logs an existing missing external Hermes adapter package warning. The loader skips that optional package. `checks.txt` records the validation output. No live apply, rollback, or restart was performed to build this kit.
 
@@ -107,6 +119,6 @@ There are nine dist-file hashes and one TypeScript provenance hash. The new modu
 | `services/issue-execution-policy.js` | `69cf5576be806043c123d7494a4060b7e66f0b59a64a4a0d4be07c4102763bad` | `161bbc3d8ad0729792d2a0f18b85066da65a81f7d4539671b14cf985c92b2a53` |
 | `services/issues.js` | `0fa69b29c66acf9aaafc073ad5ebfb4bc9238c81a25066a0de1011bfe2e46073` | `9aaf2da2d3cc9dfaa2df9143ca94f2b00b2203675f21a3f1b597e652d5c731e6` |
 | `services/recovery/issue-graph-liveness.js` | `be472a82ad60b77a13508ad7482f87c3a14bab29d7adff6a1bf67f6ec467f466` | `d205bf98bf96a9b0fb908d30a1c65e5048548e492bdb4cb06bca49170382f163` |
-| `services/issue-execution-participant-availability.js` | absent | `4ec6fc9f4549bc88bb3cae341c70568785a1698f1a229bd9ef8c00f59f947668` |
+| `services/issue-execution-participant-availability.js` | absent | `39a3220a449761614845c5d7e9ed968303411df445a83c88329a9448510df627` |
 
-Pinned source `source/issue-execution-participant-availability.ts`: `0a73c325dc62de3aba6ae6ec97e61a1a46866ab2bd53461b42cdb6dfb7c8d2b9`.
+Pinned source `source/issue-execution-participant-availability.ts`: `ce135f701beb4a47b4a71374ffb03ffe33877b82f08a5fdb2063be83e9270a4f`.

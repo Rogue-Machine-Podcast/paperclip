@@ -12,6 +12,8 @@ HERE = Path(__file__).resolve().parent
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--scratch', type=Path, default=Path(os.environ.get('PAPERCLIP_RUN_SCRATCH_DIR', os.environ.get('PAPERCLIP_SCRATCH_DIR', str(HERE / 'checks')))))
 parser.add_argument('--server', type=Path, default=Path.home()/'.paperclip/cli/installs/npm/2026.1005.0/node_modules/@paperclipai/server')
+parser.add_argument('--postgres-data', type=Path)
+parser.add_argument('--postgres-port', type=int, default=5432)
 args = parser.parse_args()
 args.scratch.mkdir(parents=True, exist_ok=True)
 work = Path(tempfile.mkdtemp(prefix='rog1333-dist-', dir=args.scratch))
@@ -45,6 +47,9 @@ for name, data in candidates.items():
     subprocess.run(['node','--check',str(target)],check=True)
 print('PASS node --check: 5/5 patched files', flush=True)
 shutil.copy2(HERE/'check_queries.mjs', mirror/'check_queries.mjs')
-subprocess.run(['node','--preserve-symlinks',str(mirror/'check_queries.mjs'),str(mirror/'dist')],check=True,timeout=50,cwd=mirror)
+query_command = ['node','--preserve-symlinks',str(mirror/'check_queries.mjs'),str(mirror/'dist')]
+if args.postgres_data:
+    query_command.extend([str(args.postgres_data),str(args.postgres_port)])
+subprocess.run(query_command,check=True,timeout=120,cwd=mirror)
 subprocess.run(['node','--preserve-symlinks',str(HERE/'check_dist.mjs'),str(mirror/'dist')],check=True,timeout=50,cwd=mirror)
 print('PASS patched-dist behavior and route import', flush=True)

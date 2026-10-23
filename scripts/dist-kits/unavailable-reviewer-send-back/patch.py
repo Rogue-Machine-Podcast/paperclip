@@ -12,13 +12,13 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 DEFAULT_ROOT = Path.home() / ".paperclip/cli/installs/npm/2026.1005.0/node_modules/@paperclipai/server/dist"
 # name, original SHA-256 (None requires absence), patched SHA-256.
-AVAILABILITY_SOURCE_SHA = '0a73c325dc62de3aba6ae6ec97e61a1a46866ab2bd53461b42cdb6dfb7c8d2b9'
+AVAILABILITY_SOURCE_SHA = 'ce135f701beb4a47b4a71374ffb03ffe33877b82f08a5fdb2063be83e9270a4f'
 FILES = (
     ('routes/issues.js', '5089ec331830eaa31a6f166721f9f5d7746531d2a698862900696db573b30964', 'baa808a570500d5de01b7f8afc0bf100fbcf9a4b1efe4a0332fc6ec56258de2c'),
     ('services/issue-execution-policy.js', '69cf5576be806043c123d7494a4060b7e66f0b59a64a4a0d4be07c4102763bad', '161bbc3d8ad0729792d2a0f18b85066da65a81f7d4539671b14cf985c92b2a53'),
     ('services/issues.js', '0fa69b29c66acf9aaafc073ad5ebfb4bc9238c81a25066a0de1011bfe2e46073', '9aaf2da2d3cc9dfaa2df9143ca94f2b00b2203675f21a3f1b597e652d5c731e6'),
     ('services/recovery/issue-graph-liveness.js', 'be472a82ad60b77a13508ad7482f87c3a14bab29d7adff6a1bf67f6ec467f466', 'd205bf98bf96a9b0fb908d30a1c65e5048548e492bdb4cb06bca49170382f163'),
-    ('services/issue-execution-participant-availability.js', None, '4ec6fc9f4549bc88bb3cae341c70568785a1698f1a229bd9ef8c00f59f947668'),
+    ('services/issue-execution-participant-availability.js', None, '39a3220a449761614845c5d7e9ed968303411df445a83c88329a9448510df627'),
 )
 
 
