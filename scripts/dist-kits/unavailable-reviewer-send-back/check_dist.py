@@ -44,5 +44,7 @@ for name, data in candidates.items():
     target.write_bytes(data)
     subprocess.run(['node','--check',str(target)],check=True)
 print('PASS node --check: 5/5 patched files', flush=True)
+shutil.copy2(HERE/'check_queries.mjs', mirror/'check_queries.mjs')
+subprocess.run(['node','--preserve-symlinks',str(mirror/'check_queries.mjs'),str(mirror/'dist')],check=True,timeout=50,cwd=mirror)
 subprocess.run(['node','--preserve-symlinks',str(HERE/'check_dist.mjs'),str(mirror/'dist')],check=True,timeout=50,cwd=mirror)
 print('PASS patched-dist behavior and route import', flush=True)
