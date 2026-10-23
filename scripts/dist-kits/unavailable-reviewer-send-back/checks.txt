@@ -1,0 +1,74 @@
+B1 revision. Patched dist uses nativeIssueId and unchanged context fallbacks.
+Pre-fix regression: AssertionError: undefined SQL interpolation in availability predicate.
+PostgreSQL 17.11; installed database migration set only.
+
+$ python3 rebuild.py
+PASS exact-anchor rebuild: 4/4 artifacts match pinned patched SHA-256 constants
+
+$ python3 check_source.py --tsc /Users/brianspector/WORKSPACE/rogue-machine-team-old-souls-new-machines--a9e699c8/paperclip-dev-1-rog-1330/node_modules/typescript/bin/tsc
+PASS new availability module: repository tsc output is byte-identical to pinned JS; ES2022/ESNext syntax emit
+
+$ python3 check_dist.py
+PASS node --check: 5/5 patched files
+PASS live-schema SQL: 4/4 queries rendered with installed PgDialect and @paperclipai/db; all interpolated columns defined; no empty interpolation or (::
+PASS send-back: return assignee and scoped watchdog; status=in_progress; assignee=return; changesRequestedCount=2; failedRunId=failed-run
+PASS no comment: 422
+PASS blank comment: 422
+PASS done: 422
+PASS unrelated agent without watchdog scope: 422
+PASS different assignee: 422
+PASS available participant: 422; Only the active reviewer or approver can advance the current execution stage
+PASS continuation exists: 422; Only the active reviewer or approver can advance the current execution stage
+PASS continuation exists: 422; Only the active reviewer or approver can advance the current execution stage
+PASS continuation exists: 422; Only the active reviewer or approver can advance the current execution stage
+PASS classifyIssueReviewPaths: unavailable=no execution_participant; available=execution_participant
+PASS availability helper: four issue-scoped queries return literal facts; no participant returns null
+PASS import routes/issues.js: issueRoutes is a function
+PASS patched-dist behavior and route import
+
+$ python3 check_postgres.py --postgres-bin /opt/homebrew/opt/postgresql@17/bin
+PASS node --check: 5/5 patched files
+PASS live-schema SQL: 4/4 queries rendered with installed PgDialect and @paperclipai/db; all interpolated columns defined; no empty interpolation or (::
+PASS scratch PostgreSQL: 292 installed 2026.1005.0 migrations applied; native_issue_id exists; issue_id absent
+PASS scratch database availability: all four queries execute; literal facts, company/agent/issue isolation, native and context run fallbacks, all four wake fallbacks, active statuses, retry timestamp, and no participant
+PASS send-back: return assignee and scoped watchdog; status=in_progress; assignee=return; changesRequestedCount=2; failedRunId=failed-run
+PASS no comment: 422
+PASS blank comment: 422
+PASS done: 422
+PASS unrelated agent without watchdog scope: 422
+PASS different assignee: 422
+PASS available participant: 422; Only the active reviewer or approver can advance the current execution stage
+PASS continuation exists: 422; Only the active reviewer or approver can advance the current execution stage
+PASS continuation exists: 422; Only the active reviewer or approver can advance the current execution stage
+PASS continuation exists: 422; Only the active reviewer or approver can advance the current execution stage
+PASS classifyIssueReviewPaths: unavailable=no execution_participant; available=execution_participant
+PASS availability helper: four issue-scoped queries return literal facts; no participant returns null
+PASS import routes/issues.js: issueRoutes is a function
+PASS patched-dist behavior and route import
+PASS scratch PostgreSQL stopped; fresh loopback port and verified data directory; live database never connected
+
+$ python3 check_round_trip.py
+live: original; kit: verified (10 SHA-256 digests; new-file original: absent)
+live: patched; apply complete; no restart performed
+live: original; rollback complete; no restart performed
+PASS scratch round trip: original -> patched -> original; 4 originals byte-identical; new file absent
+PASS corrupted artifacts: all 9 replacements/backups refused in both directions; no target bytes changed
+PASS mixed state: all 30 original/patched combinations refused by apply and rollback; no bytes changed
+PASS unknown state: corrupt target and present empty new file refused; no bytes changed
+PASS partial-write recovery: failures before/after every replacement and after new-file removal restore exact prior bytes
+PASS temporary replacement hash mismatch: refused before target writes
+PASS 112 corruption/state/failure checks plus round trip; live install never targeted
+
+$ python3 assemble.py --output /var/folders/ph/v5b5zk496bqcfcnv5n_96yn00000gn/T/paperclip-run-rog-1333-02289d06-48e-JuqLsX/b1-fresh-kit
+PASS exact-anchor rebuild: 4/4 artifacts match pinned patched SHA-256 constants
+live: original; kit: verified (10 SHA-256 digests; new-file original: absent)
+PASS kit assembled: /var/folders/ph/v5b5zk496bqcfcnv5n_96yn00000gn/T/paperclip-run-rog-1333-02289d06-48e-JuqLsX/b1-fresh-kit; install unchanged
+
+$ python3 patch.py verify
+live: original; kit: verified (10 SHA-256 digests; new-file original: absent)
+
+$ python3 -m py_compile assemble.py check_dist.py check_postgres.py check_round_trip.py check_source.py patch.py rebuild.py
+
+PASS Python syntax checks: all kit Python scripts
+No live apply, rollback, or restart; no live database connection.
+Full workspace build/typecheck and HTTP route integration tests were not run.

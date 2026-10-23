@@ -1,0 +1,70 @@
+{
+  "routes/issues.js": [
+    [
+      "import { setIssueTitle } from \"../services/issue-title.js\";\n",
+      "import { getExecutionParticipantAvailability, isExecutionParticipantUnavailable } from \"../services/issue-execution-participant-availability.js\";\nimport { setIssueTitle } from \"../services/issue-title.js\";\n"
+    ],
+    [
+      "        const transition = applyIssueExecutionPolicyTransition({\n            issue: existing,\n            policy: nextExecutionPolicy,\n            previousPolicy: previousExecutionPolicy,\n            requestedStatus: typeof updateFields.status === \"string\"\n                ? updateFields.status\n                : undefined,\n            requestedAssigneePatch: {\n                assigneeAgentId: normalizedAssigneeAgentId,\n                assigneeUserId: req.body.assigneeUserId === undefined\n                    ? undefined\n                    : req.body.assigneeUserId,\n            },\n            actor: {\n                agentId: actor.agentId ?? null,\n                userId: actor.actorType === \"user\" ? actor.actorId : null,\n            },\n            allowBoardOverride: req.actor.type === \"board\",\n            commentBody,\n            reviewRequest: reviewRequest === undefined ? undefined : reviewRequest,\n            monitorExplicitlyUpdated: req.body.executionPolicy !== undefined && monitorChanged,\n        });\n",
+      "        const pendingParticipant = parseIssueExecutionState(existing.executionState)?.currentParticipant;\n        const participantAvailability = req.actor.type === \"agent\" && pendingParticipant?.type === \"agent\" &&\n            pendingParticipant.agentId !== req.actor.agentId &&\n            (updateFields.status !== undefined || normalizedAssigneeAgentId !== undefined || req.body.assigneeUserId !== undefined)\n            ? await getExecutionParticipantAvailability(db, existing) : null;\n        const sendBackWatchdogScope = isExecutionParticipantUnavailable(participantAvailability)\n            ? await taskWatchdogScopeAllowsIssueMutation(db, await resolveTaskWatchdogMutationScope(db, req.actor), existing, { allowWatchdogIssue: false })\n            : null;\n        const transitionInput = {\n            issue: existing,\n            policy: nextExecutionPolicy,\n            previousPolicy: previousExecutionPolicy,\n            requestedStatus: typeof updateFields.status === \"string\"\n                ? updateFields.status\n                : undefined,\n            requestedAssigneePatch: {\n                assigneeAgentId: normalizedAssigneeAgentId,\n                assigneeUserId: req.body.assigneeUserId === undefined\n                    ? undefined\n                    : req.body.assigneeUserId,\n            },\n            actor: {\n                agentId: actor.agentId ?? null,\n                userId: actor.actorType === \"user\" ? actor.actorId : null,\n            },\n            allowBoardOverride: req.actor.type === \"board\",\n            participantAvailability,\n            taskWatchdogScopeAllowed: sendBackWatchdogScope?.kind === \"watchdog\",\n            commentBody,\n            reviewRequest: reviewRequest === undefined ? undefined : reviewRequest,\n            monitorExplicitlyUpdated: req.body.executionPolicy !== undefined && monitorChanged,\n        };\n        const transition = applyIssueExecutionPolicyTransition(transitionInput);\n"
+    ],
+    [
+      "        if (assigneeWillChange && existing.assigneeAgentId) {",
+      "        if (assigneeWillChange && existing.assigneeAgentId &&\n            !transition.participantUnavailableSendBack) {"
+    ],
+    [
+      "const transactionalCommentSourceTrust = commentAttachmentIds?.length || commentWithAdapterOverrides\n",
+      "const transactionalCommentSourceTrust = commentAttachmentIds?.length || commentWithAdapterOverrides || transition.participantUnavailableSendBack\n"
+    ],
+    [
+      "            Boolean(decision) ||\n            shouldRelayStop ||",
+      "            Boolean(decision) ||\n            Boolean(transition.participantUnavailableSendBack) ||\n            shouldRelayStop ||"
+    ],
+    [
+      "                    const updated = await updateIssue(tx);",
+      "                    if (transition.participantUnavailableSendBack) {\n                        const lockedIssue = await svc.getByIdForUpdate(id, tx);\n                        if (!lockedIssue)\n                            return null;\n                        if (lockedIssue.status !== existing.status ||\n                            JSON.stringify(lockedIssue.executionState) !== JSON.stringify(existing.executionState) ||\n                            JSON.stringify(lockedIssue.executionPolicy) !== JSON.stringify(existing.executionPolicy)) {\n                            throw conflict(\"The execution stage changed before the send-back. Read the issue and try again.\");\n                        }\n                        const freshAvailability = await getExecutionParticipantAvailability(tx, lockedIssue);\n                        const freshScope = await taskWatchdogScopeAllowsIssueMutation(tx, await resolveTaskWatchdogMutationScope(tx, req.actor), lockedIssue, { allowWatchdogIssue: false });\n                        const checked = applyIssueExecutionPolicyTransition({\n                            ...transitionInput, issue: lockedIssue, participantAvailability: freshAvailability,\n                            taskWatchdogScopeAllowed: freshScope.kind === \"watchdog\",\n                        });\n                        if (!checked.participantUnavailableSendBack) {\n                            throw unprocessable(\"The execution participant is available. Only the active reviewer or approver can advance the current execution stage.\");\n                        }\n                        transition.participantUnavailableSendBack = checked.participantUnavailableSendBack;\n                    }\n                    const updated = await updateIssue(tx);"
+    ],
+    [
+      "                    if (commentAttachmentIds?.length || commentWithAdapterOverrides) {",
+      "                    if (transition.participantUnavailableSendBack) {\n                        await logActivity(tx, {\n                            companyId: updated.companyId, actorType: actor.actorType, actorId: actor.actorId,\n                            agentId: actor.agentId, runId: actor.runId, agentApiKeyId: actor.agentApiKeyId,\n                            action: \"issue.execution_participant_unavailable_send_back\", entityType: \"issue\", entityId: updated.id,\n                            issueId: updated.id,\n                            details: { ...transition.participantUnavailableSendBack, actorId: actor.actorId,\n                                stageId: parseIssueExecutionState(existing.executionState)?.currentStageId ?? null },\n                        }, postCommitActivityPublications);\n                    }\n                    if (commentAttachmentIds?.length || commentWithAdapterOverrides || transition.participantUnavailableSendBack) {"
+    ]
+  ],
+  "services/issue-execution-policy.js": [
+    [
+      "import { unprocessable }",
+      "import { isExecutionParticipantUnavailable } from \"./issue-execution-participant-availability.js\";\nimport { unprocessable }"
+    ],
+    [
+      "    if (activeStage) {",
+      "    if (activeStage && existingState) {"
+    ],
+    [
+      "        if (attemptedStageAdvance && !stageStateDrifted) {",
+      "        const availability = currentParticipant.type === \"agent\" &&\n            input.participantAvailability?.agentId === currentParticipant.agentId\n            ? input.participantAvailability : null;\n        if (isExecutionParticipantUnavailable(availability) && availability && attemptedStageAdvance) {\n            const returnAssignee = existingState?.returnAssignee;\n            const actorCanSendBack = principalsEqual(returnAssignee ?? null, actor) || input.taskWatchdogScopeAllowed === true;\n            if (actorCanSendBack && requestedStatus === \"in_progress\" && returnAssignee &&\n                (!requestedAssigneePatchProvided || principalsEqual(explicitAssignee, returnAssignee))) {\n                if (!input.commentBody?.trim()) {\n                    throw unprocessable(`Sending back an unavailable participant's stage requires a comment. ${STAGE_DECISION_COMMENT_HINT}`);\n                }\n                patch.status = \"in_progress\";\n                Object.assign(patch, patchForPrincipal(returnAssignee));\n                patch.executionState = buildChangesRequestedState(existingState, activeStage, existingState.changesRequestedCount ?? 0);\n                return {\n                    patch,\n                    workflowControlledAssignment: true,\n                    participantUnavailableSendBack: {\n                        participantAgentId: availability.agentId,\n                        failedRunId: availability.latestRun && [\"failed\", \"cancelled\"].includes(availability.latestRun.status)\n                            ? availability.latestRun.id : null,\n                    },\n                };\n            }\n            throw unprocessable(\"Only the active reviewer or approver can advance the current execution stage. The participant is unavailable. The return assignee or an in-scope task watchdog can send back with status in_progress, the return assignee, and a non-empty comment.\");\n        }\n        if (attemptedStageAdvance && !stageStateDrifted) {"
+    ]
+  ],
+  "services/issues.js": [
+    [
+      "import { recordChatHandoff, recordChatCompletion, existingChatCompletionReply, acknowledgeChatCompletionReply } from \"./chat-completion-delivery.js\";\n",
+      "import { getExecutionParticipantAvailability } from \"./issue-execution-participant-availability.js\";\nimport { recordChatHandoff, recordChatCompletion, existingChatCompletionReply, acknowledgeChatCompletionReply } from \"./chat-completion-delivery.js\";\n"
+    ],
+    [
+      "        agents: agentRows,\n",
+      "        agents: agentRows,\n        participantAvailability: (await Promise.all(reviewIssues.map((issue) => getExecutionParticipantAvailability(dbOrTx, issue)))).filter((facts) => facts !== null),\n"
+    ],
+    [
+      "        agents: companyAgents,\n",
+      "        agents: companyAgents,\n        participantAvailability: (await Promise.all(graphIssues.filter((issue) => issue.status === \"in_review\").map((issue) => getExecutionParticipantAvailability(dbOrTx, issue)))).filter((facts) => facts !== null),\n"
+    ]
+  ],
+  "services/recovery/issue-graph-liveness.js": [
+    [
+      "import { buildIssueGraphLivenessIncidentKey }",
+      "import { isExecutionParticipantUnavailable } from \"../issue-execution-participant-availability.js\";\nimport { buildIssueGraphLivenessIncidentKey }"
+    ],
+    [
+      "        const participantAgent = agentsById.get(participantAgentId);\n        if (participantAgent?.companyId === issue.companyId && isInvokableAgent(participantAgent, agentsById)) {\n",
+      "        const participantAgent = agentsById.get(participantAgentId);\n        const availability = input.participantAvailability?.find((facts) => facts.companyId === issue.companyId && facts.issueId === issue.id && facts.agentId === participantAgentId);\n        if (participantAgent?.companyId === issue.companyId && isInvokableAgent(participantAgent, agentsById) &&\n            !isExecutionParticipantUnavailable(availability)) {\n"
+    ]
+  ]
+}

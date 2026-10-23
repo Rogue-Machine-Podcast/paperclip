@@ -1,0 +1,22 @@
+{
+  "routes/issues.js": {
+    "original": "5089ec331830eaa31a6f166721f9f5d7746531d2a698862900696db573b30964",
+    "patched": "baa808a570500d5de01b7f8afc0bf100fbcf9a4b1efe4a0332fc6ec56258de2c"
+  },
+  "services/issue-execution-policy.js": {
+    "original": "69cf5576be806043c123d7494a4060b7e66f0b59a64a4a0d4be07c4102763bad",
+    "patched": "161bbc3d8ad0729792d2a0f18b85066da65a81f7d4539671b14cf985c92b2a53"
+  },
+  "services/issues.js": {
+    "original": "0fa69b29c66acf9aaafc073ad5ebfb4bc9238c81a25066a0de1011bfe2e46073",
+    "patched": "9aaf2da2d3cc9dfaa2df9143ca94f2b00b2203675f21a3f1b597e652d5c731e6"
+  },
+  "services/recovery/issue-graph-liveness.js": {
+    "original": "be472a82ad60b77a13508ad7482f87c3a14bab29d7adff6a1bf67f6ec467f466",
+    "patched": "d205bf98bf96a9b0fb908d30a1c65e5048548e492bdb4cb06bca49170382f163"
+  },
+  "services/issue-execution-participant-availability.js": {
+    "original": null,
+    "patched": "39a3220a449761614845c5d7e9ed968303411df445a83c88329a9448510df627"
+  }
+}
