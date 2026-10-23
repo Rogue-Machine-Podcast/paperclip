@@ -1,4 +1,5 @@
 import { getAgentWorkEligibility, isAgentInvokable } from "@paperclipai/shared";
+import { isExecutionParticipantUnavailable, type ExecutionParticipantAvailability } from "../issue-execution-participant-availability.js";
 import { buildIssueGraphLivenessIncidentKey } from "./origins.js";
 
 export type IssueLivenessSeverity = "warning" | "critical";
@@ -124,6 +125,7 @@ export interface IssueGraphLivenessInput {
   issues: IssueLivenessIssueInput[];
   relations: IssueLivenessRelationInput[];
   agents: IssueLivenessAgentInput[];
+  participantAvailability?: ExecutionParticipantAvailability[];
   activeRuns?: IssueLivenessExecutionPathInput[];
   queuedWakeRequests?: IssueLivenessExecutionPathInput[];
   pendingInteractions?: IssueLivenessWaitingPathInput[];
@@ -246,7 +248,10 @@ export function classifyIssueReviewPaths(
   const participantAgentId = readPrincipalAgentId(participant);
   if (participantAgentId) {
     const participantAgent = agentsById.get(participantAgentId);
-    if (participantAgent?.companyId === issue.companyId && isInvokableAgent(participantAgent, agentsById)) {
+    const availability = input.participantAvailability?.find((facts) =>
+      facts.companyId === issue.companyId && facts.issueId === issue.id && facts.agentId === participantAgentId);
+    if (participantAgent?.companyId === issue.companyId && isInvokableAgent(participantAgent, agentsById) &&
+      !isExecutionParticipantUnavailable(availability)) {
       paths.push({
         kind: "execution_participant",
         ref: participantAgentId,

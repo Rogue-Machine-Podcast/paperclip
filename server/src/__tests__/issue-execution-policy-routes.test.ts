@@ -1,3 +1,4 @@
+import { getTableName, type Table } from "drizzle-orm";
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -60,6 +61,8 @@ const mockDb = vi.hoisted(() => ({
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn(async () => undefined));
+const mockPublishActivity = vi.hoisted(() => vi.fn());
+const mockResolveActorSourceTrust = vi.hoisted(() => vi.fn(async (_input: unknown): Promise<unknown> => null));
 const mockIssueThreadInteractionService = vi.hoisted(() => ({
   expirePendingInteractionsForTerminalIssue: vi.fn(async () => []),
   listForIssue: vi.fn(async () => []),
@@ -74,6 +77,10 @@ const mockRunnerGoalService = vi.hoisted(() => ({
 }));
 
 function registerModuleMocks() {
+  vi.doMock("../services/source-trust.js", async (importOriginal) => ({
+    ...await importOriginal<typeof import("../services/source-trust.js")>(),
+    resolveActorSourceTrustForIssue: mockResolveActorSourceTrust,
+  }));
   vi.doMock("../services/queued-interaction-response.js", () => ({
     hasQueuedInteractionResponse: vi.fn(async () => false),
   }));
@@ -150,6 +157,7 @@ function registerModuleMocks() {
     issueService: () => mockIssueService,
     issueThreadInteractionService: () => mockIssueThreadInteractionService,
     logActivity: mockLogActivity,
+    publishActivity: mockPublishActivity,
     projectService: () => ({}),
     routineService: () => ({
       syncRunStatusForIssue: vi.fn(async () => undefined),
@@ -207,6 +215,11 @@ describe("issue execution policy routes", () => {
     vi.doUnmock("../middleware/index.js");
     registerModuleMocks();
     vi.clearAllMocks();
+    mockResolveActorSourceTrust.mockResolvedValue(null);
+    mockLogActivity.mockImplementation(async () => undefined);
+    mockHeartbeatService.getActiveRunForAgent.mockResolvedValue(null);
+    mockHeartbeatService.cancelRun.mockResolvedValue(null);
+    mockIssueService.addComment.mockReset();
     mockIssueService.assertCheckoutOwner.mockResolvedValue({ adoptedFromRunId: null });
     mockIssueService.getByIdForUpdate.mockImplementation(async () => mockIssueService.getById());
     mockIssueService.findMentionedAgents.mockResolvedValue([]);
@@ -270,6 +283,103 @@ describe("issue execution policy routes", () => {
     // Finish cold imports before a test configures its request-specific mocks.
     // A timed-out import must not resume a request against the next test's mocks.
     await loadAppModules();
+  });
+
+  it.each(["success", "active_run_after_preflight", "queued_wake_after_preflight", "retry_after_preflight", "stage_changed", "comment_failure"])(
+    "handles unavailable reviewer send-back with a pending board confirmation (%s)", async (scenario) => {
+    const reviewerId = "33333333-3333-4333-8333-333333333333";
+    const returnId = "44444444-4444-4444-8444-444444444444";
+    const issueId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const failedRunId = "66666666-6666-4666-8666-666666666666";
+    const policy = normalizeIssueExecutionPolicy({ stages: [{ type: "review", participants: [{ type: "agent", agentId: reviewerId }] }] })!;
+    const issue = {
+      id: issueId, companyId: "company-1", status: "in_review", assigneeAgentId: reviewerId,
+      assigneeUserId: null, createdByUserId: "local-board", identifier: "PAP-1318", title: "Failed dispatch review",
+      executionPolicy: policy, executionState: {
+        status: "pending", currentStageId: policy.stages[0].id, currentStageIndex: 0, currentStageType: "review",
+        currentParticipant: { type: "agent", agentId: reviewerId }, returnAssignee: { type: "agent", agentId: returnId },
+        completedStageIds: [], lastDecisionId: null, lastDecisionOutcome: null, changesRequestedCount: 1,
+      },
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    if (scenario === "stage_changed") mockIssueService.getByIdForUpdate.mockResolvedValue({ ...issue,
+      executionState: { ...issue.executionState, changesRequestedCount: 2 } });
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({ ...issue, ...patch, updatedAt: new Date() }));
+    mockIssueService.addComment.mockResolvedValue({ id: "comment-1", issueId, body: "Return after failed reviewer dispatch", createdAt: new Date() });
+    if (scenario === "comment_failure") mockIssueService.addComment.mockRejectedValue(new Error("Comment storage failed"));
+    const sourceTrust = { preset: "low_trust_review", disposition: "quarantined", sourceIssueId: issueId,
+      sourceAgentId: returnId, sourceRunId: "77777777-7777-4777-8777-777777777777" };
+    mockResolveActorSourceTrust.mockResolvedValue(sourceTrust);
+    const publication = { marker: "send-back-publication" };
+    mockLogActivity.mockImplementation(async (_db: unknown, entry: { action: string }, buffer?: unknown[]) => {
+      if (entry.action === "issue.execution_participant_unavailable_send_back") {
+        if (buffer) buffer.push(publication);
+        else mockPublishActivity(publication);
+      }
+    });
+    if (scenario === "active_run_after_preflight") {
+      mockHeartbeatService.getActiveRunForAgent.mockResolvedValue({ id: "new-review-run", agentId: reviewerId, status: "running" } as never);
+      mockHeartbeatService.cancelRun.mockResolvedValue({ id: "new-review-run", status: "cancelled" } as never);
+    }
+    let availabilityReads = 0;
+    mockIssueThreadInteractionService.listForIssue.mockResolvedValue([{
+      id: "confirmation-1", kind: "request_confirmation", status: "pending", effectiveResolverPolicy: "human_only",
+      createdByAgentId: reviewerId, continuationPolicy: "wake_assignee",
+    }] as never);
+    mockDbSelect.mockImplementation((projection?: Record<string, unknown>) => ({
+      from: (table: unknown) => {
+        const tableName = getTableName(table as Table);
+        let rows: unknown[] = [];
+        if (tableName === "agents") {
+          if (projection && "status" in projection) availabilityReads += 1;
+          rows = [{ status: "error", companyId: "company-1" }];
+        }
+        if (tableName === "heartbeat_runs" && projection && "scheduledRetryAt" in projection) {
+          rows = [{ id: failedRunId, status: "failed", scheduledRetryAt:
+            scenario === "retry_after_preflight" && availabilityReads > 1 ? new Date("2099-01-01") : null }];
+        } else if (tableName === "heartbeat_runs" && projection && "contextSnapshot" in projection) {
+          rows = [{ id: "77777777-7777-4777-8777-777777777777", companyId: "company-1", agentId: returnId, contextSnapshot: { issueId } }];
+        }
+        if (tableName === "heartbeat_runs" && projection && Object.keys(projection).length === 1 &&
+          scenario === "active_run_after_preflight" && availabilityReads > 1) rows = [{ id: "new-review-run" }];
+        if (tableName === "agent_wakeup_requests") rows = scenario === "queued_wake_after_preflight" && availabilityReads > 1
+          ? [{ id: "new-wake" }] : [];
+        const query = {
+          where: () => query, orderBy: () => query, for: () => query, limit: () => Promise.resolve(rows),
+          then: (resolve: (value: unknown[]) => unknown) => Promise.resolve(rows).then(resolve),
+        };
+        return query;
+      },
+    }) as never);
+    const res = await request(await createApp({ type: "agent", agentId: returnId, companyId: "company-1", runId: "77777777-7777-4777-8777-777777777777" }))
+      .patch(`/api/issues/${issueId}`)
+      .send({ status: "in_progress", assigneeAgentId: returnId, comment: "Return after failed reviewer dispatch" });
+    expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+    expect(mockRunnerGoalService.act).not.toHaveBeenCalled();
+    if (scenario !== "success" && scenario !== "comment_failure") {
+      expect(res.status, JSON.stringify(res.body)).toBe(scenario === "stage_changed" ? 409 : 422);
+      expect(mockIssueService.update).not.toHaveBeenCalled();
+      expect(mockPublishActivity).not.toHaveBeenCalled();
+      return;
+    }
+    if (scenario === "comment_failure") {
+      expect(res.status).toBe(500);
+      expect(mockPublishActivity).not.toHaveBeenCalled();
+      return;
+    }
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockPublishActivity).toHaveBeenCalledWith(publication);
+    expect(res.body).toMatchObject({ status: "in_progress", assigneeAgentId: returnId,
+      executionState: { status: "changes_requested", currentStageId: policy.stages[0].id, changesRequestedCount: 1 } });
+    expect(mockLogActivity).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "issue.execution_participant_unavailable_send_back", actorId: returnId,
+      details: { participantAgentId: reviewerId, failedRunId, actorId: returnId, stageId: policy.stages[0].id },
+    }), expect.any(Array));
+    expect(mockIssueService.addComment).toHaveBeenCalledWith(issueId, "Return after failed reviewer dispatch",
+      expect.objectContaining({ agentId: returnId }), expect.objectContaining({ sourceTrust }), expect.anything());
+    expect(mockIssueThreadInteractionService.expireRequestConfirmationsSupersededByComment).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "in_progress" }), expect.objectContaining({ id: "comment-1" }),
+      { agentId: returnId, userId: null });
   });
 
   it.each([

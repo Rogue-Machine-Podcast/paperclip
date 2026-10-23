@@ -1,3 +1,5 @@
+import { eq } from "drizzle-orm";
+import { getExecutionParticipantAvailability, isExecutionParticipantUnavailable } from "../services/issue-execution-participant-availability.js";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -98,6 +100,65 @@ describeEmbeddedPostgres("issue review attention", () => {
     });
     return id;
   }
+
+  it("does not count a failed, unretried error participant as an execution path", async () => {
+    const { companyId, agentId } = await seed();
+    const stageId = randomUUID();
+    const issueId = await insertReview({ companyId, agentId, identifier: "RVA-ERROR", executionState: {
+      status: "pending", currentStageId: stageId, currentStageIndex: 0, currentStageType: "review",
+      currentParticipant: { type: "agent", agentId }, returnAssignee: null, completedStageIds: [],
+      lastDecisionId: null, lastDecisionOutcome: null,
+    } });
+    await db.update(agents).set({ status: "error" }).where(eq(agents.id, agentId));
+    const failedRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({ id: failedRunId, companyId, agentId,
+      status: "failed", contextSnapshot: { issueId }, finishedAt: new Date() });
+    const row = (await svc.list(companyId, { status: "in_review" })).find((entry) => entry.id === issueId);
+    expect(row?.reviewAttention).toMatchObject({ state: "stalled", paths: [] });
+    expect(await getExecutionParticipantAvailability(db, { id: issueId, companyId, executionState: (await svc.getById(issueId))?.executionState }))
+      .toMatchObject({ agentStatus: "error", hasActiveRun: false, hasQueuedWake: false,
+        latestRun: { id: failedRunId, status: "failed", scheduledRetryAt: null } });
+  });
+
+  it("reads issue-scoped runs, wakes, and retries before allowing send-back", async () => {
+    const { companyId, agentId } = await seed();
+    const stageId = randomUUID();
+    const executionState = {
+      status: "pending", currentStageId: stageId, currentStageIndex: 0, currentStageType: "review",
+      currentParticipant: { type: "agent", agentId }, returnAssignee: null, completedStageIds: [],
+      lastDecisionId: null, lastDecisionOutcome: null,
+    };
+    const issueId = await insertReview({ companyId, agentId, identifier: "RVA-FACTS", executionState });
+    const otherIssueId = await insertReview({ companyId, agentId, identifier: "RVA-OTHER" });
+    const target = { id: issueId, companyId, executionState };
+    const check = async () => isExecutionParticipantUnavailable(await getExecutionParticipantAvailability(db, target));
+    const failedRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({ id: failedRunId, companyId, agentId, issueId,
+      status: "failed", createdAt: new Date("2026-01-01"), finishedAt: new Date() });
+    expect(await check()).toBe(true);
+    await db.insert(heartbeatRuns).values({ companyId, agentId, issueId: otherIssueId, status: "running" });
+    expect(await check()).toBe(true);
+    const runId = randomUUID();
+    await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, issueId, status: "running" });
+    expect(await check()).toBe(false);
+    await db.update(heartbeatRuns).set({ status: "cancelled", scheduledRetryAt: new Date("2099-01-01") }).where(eq(heartbeatRuns.id, runId));
+    expect(await check()).toBe(false);
+    await db.update(heartbeatRuns).set({ scheduledRetryAt: null }).where(eq(heartbeatRuns.id, runId));
+    expect(await check()).toBe(true);
+    const wakeId = randomUUID();
+    await db.insert(agentWakeupRequests).values({ id: wakeId, companyId, agentId, source: "automation",
+      status: "deferred_issue_execution", payload: { _paperclipWakeContext: { taskId: issueId } } });
+    expect(await check()).toBe(false);
+    await db.update(agentWakeupRequests).set({ status: "failed" }).where(eq(agentWakeupRequests.id, wakeId));
+    expect(await check()).toBe(true);
+    await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, runId));
+    expect(await check()).toBe(false);
+    await db.update(agents).set({ status: "paused" }).where(eq(agents.id, agentId));
+    expect(await check()).toBe(true);
+    expect(await getExecutionParticipantAvailability(db, { ...target, executionState: {
+      ...executionState, currentParticipant: { type: "user", userId: "board" },
+    } })).toBeNull();
+  });
 
   it("surfaces a pathless agent-owned review as stalled and a queued recovery as covered", async () => {
     const { companyId, agentId } = await seed();

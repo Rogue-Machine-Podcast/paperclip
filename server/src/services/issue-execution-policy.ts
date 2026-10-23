@@ -11,6 +11,7 @@ import type {
   IssueMonitorScheduledBy,
 } from "@paperclipai/shared";
 import { issueExecutionPolicySchema, issueExecutionStateSchema } from "@paperclipai/shared";
+import { isExecutionParticipantUnavailable, type ExecutionParticipantAvailability } from "./issue-execution-participant-availability.js";
 import { unprocessable } from "../errors.js";
 
 type AssigneeLike = {
@@ -50,6 +51,8 @@ type TransitionInput = {
   requestedAssigneePatch: RequestedAssigneePatch;
   actor: ActorLike;
   allowBoardOverride?: boolean;
+  participantAvailability?: ExecutionParticipantAvailability | null;
+  taskWatchdogScopeAllowed?: boolean;
   commentBody?: string | null;
   reviewRequest?: IssueExecutionState["reviewRequest"] | null;
   monitorExplicitlyUpdated?: boolean;
@@ -59,6 +62,7 @@ type TransitionResult = {
   patch: Record<string, unknown>;
   decision?: Pick<IssueExecutionDecision, "stageId" | "stageType" | "outcome" | "body">;
   workflowControlledAssignment?: boolean;
+  participantUnavailableSendBack?: { participantAgentId: string; failedRunId: string | null };
 };
 
 /**
@@ -706,7 +710,7 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
     return { patch };
   }
 
-  if (activeStage) {
+  if (activeStage && existingState) {
     const currentParticipant =
       existingState?.currentParticipant ??
       selectStageParticipant(activeStage, {
@@ -939,6 +943,33 @@ function applyIssueExecutionStageTransition(input: TransitionInput): TransitionR
         patch.status = "in_progress";
       }
       return { patch };
+    }
+
+    const availability = currentParticipant.type === "agent" &&
+      input.participantAvailability?.agentId === currentParticipant.agentId
+      ? input.participantAvailability : null;
+    if (isExecutionParticipantUnavailable(availability) && availability && attemptedStageAdvance) {
+      const returnAssignee = existingState?.returnAssignee;
+      const actorCanSendBack = principalsEqual(returnAssignee ?? null, actor) || input.taskWatchdogScopeAllowed === true;
+      if (actorCanSendBack && requestedStatus === "in_progress" && returnAssignee &&
+        (!requestedAssigneePatchProvided || principalsEqual(explicitAssignee, returnAssignee))) {
+        if (!input.commentBody?.trim()) {
+          throw unprocessable(`Sending back an unavailable participant's stage requires a comment. ${STAGE_DECISION_COMMENT_HINT}`);
+        }
+        patch.status = "in_progress";
+        Object.assign(patch, patchForPrincipal(returnAssignee));
+        patch.executionState = buildChangesRequestedState(existingState, activeStage, existingState.changesRequestedCount ?? 0);
+        return {
+          patch,
+          workflowControlledAssignment: true,
+          participantUnavailableSendBack: {
+            participantAgentId: availability.agentId,
+            failedRunId: availability.latestRun && ["failed", "cancelled"].includes(availability.latestRun.status)
+              ? availability.latestRun.id : null,
+          },
+        };
+      }
+      throw unprocessable("Only the active reviewer or approver can advance the current execution stage. The participant is unavailable. The return assignee or an in-scope task watchdog can send back with status in_progress, the return assignee, and a non-empty comment.");
     }
 
     if (attemptedStageAdvance && !stageStateDrifted) {

@@ -1,3 +1,4 @@
+import { getExecutionParticipantAvailability, isExecutionParticipantUnavailable } from "../services/issue-execution-participant-availability.js";
 import { parseObject } from "../adapters/utils.js";
 import { enqueueFastResponse } from "../services/fast-responses.js";
 import { hasRequiredWorkspaceRecovery, LEGACY_WORKSPACE_RECOVERY_SCHEMA } from "../services/workspace-restore-recovery-state.js";
@@ -13993,7 +13994,15 @@ export function issueRoutes(
         req.body.executionPolicy !== undefined && monitorChanged,
       );
 
-      const transition = applyIssueExecutionPolicyTransition({
+      const pendingParticipant = parseIssueExecutionState(existing.executionState)?.currentParticipant;
+      const participantAvailability = req.actor.type === "agent" && pendingParticipant?.type === "agent" &&
+        pendingParticipant.agentId !== req.actor.agentId &&
+        (updateFields.status !== undefined || normalizedAssigneeAgentId !== undefined || req.body.assigneeUserId !== undefined)
+        ? await getExecutionParticipantAvailability(db, existing) : null;
+      const sendBackWatchdogScope = isExecutionParticipantUnavailable(participantAvailability)
+        ? await taskWatchdogScopeAllowsIssueMutation(db, await resolveTaskWatchdogMutationScope(db, req.actor), existing, { allowWatchdogIssue: false })
+        : null;
+      const transitionInput = {
         issue: existing,
         policy: nextExecutionPolicy,
         previousPolicy: previousExecutionPolicy,
@@ -14013,11 +14022,14 @@ export function issueRoutes(
           userId: actor.actorType === "user" ? actor.actorId : null,
         },
         allowBoardOverride: req.actor.type === "board" && req.actor.source !== "mcp_oauth",
+        participantAvailability,
+        taskWatchdogScopeAllowed: sendBackWatchdogScope?.kind === "watchdog",
         commentBody,
         reviewRequest: reviewRequest === undefined ? undefined : reviewRequest,
         monitorExplicitlyUpdated:
           req.body.executionPolicy !== undefined && monitorChanged,
-      });
+      };
+      const transition = applyIssueExecutionPolicyTransition(transitionInput);
       const decisionId = transition.decision ? randomUUID() : null;
       if (decisionId) {
         const nextExecutionState = transition.patch.executionState;
@@ -14255,7 +14267,8 @@ export function issueRoutes(
       // Only this request may finish a mutation that intentionally stops its
       // own run (for example handing work to a signoff reviewer).
       const issueMutationStopId = randomUUID();
-      if (req.actor.source !== "mcp_oauth" && assigneeWillChange && existing.assigneeAgentId) {
+      if (req.actor.source !== "mcp_oauth" && assigneeWillChange && existing.assigneeAgentId &&
+        !transition.participantUnavailableSendBack) {
         await stopRunnerGoalForOwnershipChange({
           companyId: existing.companyId,
           issueId: existing.id,
@@ -14507,13 +14520,14 @@ export function issueRoutes(
       const commentWithAdapterOverrides = Boolean(
         commentBody && updateFields.assigneeAdapterOverrides !== undefined,
       );
-      const transactionalCommentSourceTrust = commentAttachmentIds?.length || commentWithAdapterOverrides
+      const transactionalCommentSourceTrust = commentAttachmentIds?.length || commentWithAdapterOverrides || transition.participantUnavailableSendBack
         ? await sourceTrustForActorWrite(existing, actor)
         : undefined;
       const shouldUseTransactionalIssueUpdate =
         Boolean(commentAttachmentIds?.length) ||
         commentWithAdapterOverrides ||
         Boolean(decision) ||
+        Boolean(transition.participantUnavailableSendBack) ||
         shouldRelayStop ||
         persistReviewActivityTransactionally ||
         reviewPolicySensitiveMutationRequested;
@@ -14525,9 +14539,39 @@ export function issueRoutes(
               !(await assertLockedReviewPolicyAllowsMutation(tx))
             )
               return null;
+            if (transition.participantUnavailableSendBack) {
+              const lockedIssue = await svc.getByIdForUpdate(id, tx);
+              if (!lockedIssue) return null;
+              if (lockedIssue.status !== existing.status ||
+                JSON.stringify(lockedIssue.executionState) !== JSON.stringify(existing.executionState) ||
+                JSON.stringify(lockedIssue.executionPolicy) !== JSON.stringify(existing.executionPolicy)) {
+                throw conflict("The execution stage changed before the send-back. Read the issue and try again.");
+              }
+              const freshAvailability = await getExecutionParticipantAvailability(tx as unknown as Db, lockedIssue);
+              const freshScope = await taskWatchdogScopeAllowsIssueMutation(tx as unknown as Db,
+                await resolveTaskWatchdogMutationScope(tx as unknown as Db, req.actor), lockedIssue, { allowWatchdogIssue: false });
+              const checked = applyIssueExecutionPolicyTransition({
+                ...transitionInput, issue: lockedIssue, participantAvailability: freshAvailability,
+                taskWatchdogScopeAllowed: freshScope.kind === "watchdog",
+              });
+              if (!checked.participantUnavailableSendBack) {
+                throw unprocessable("The execution participant is available. Only the active reviewer or approver can advance the current execution stage.");
+              }
+              transition.participantUnavailableSendBack = checked.participantUnavailableSendBack;
+            }
             const updated = await updateIssue(tx);
             if (!updated) return null;
-            if (commentAttachmentIds?.length || commentWithAdapterOverrides) {
+            if (transition.participantUnavailableSendBack) {
+              await logActivity(tx as unknown as Db, {
+                companyId: updated.companyId, actorType: actor.actorType, actorId: actor.actorId,
+                agentId: actor.agentId, runId: actor.runId, agentApiKeyId: actor.agentApiKeyId,
+                action: "issue.execution_participant_unavailable_send_back", entityType: "issue", entityId: updated.id,
+                issueId: updated.id,
+                details: { ...transition.participantUnavailableSendBack, actorId: actor.actorId,
+                  stageId: parseIssueExecutionState(existing.executionState)?.currentStageId ?? null },
+              }, postCommitActivityPublications);
+            }
+            if (commentAttachmentIds?.length || commentWithAdapterOverrides || transition.participantUnavailableSendBack) {
               // Adapter settings, reassignment, comment and upload binding commit together.
               // A failed comment or invalid receipt rolls back the issue update.
               transactionalComment = await svc.addComment(
