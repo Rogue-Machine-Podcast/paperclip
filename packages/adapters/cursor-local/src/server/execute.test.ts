@@ -491,3 +491,118 @@ printf '%s\\n' '{"type":"result","subtype":"success","session_id":"cursor-sessio
     }
   });
 });
+
+describe("cursor execute terminal-result cleanup", () => {
+  it.skipIf(process.platform === "win32").each([
+    { name: "explicit success after CLI exit with the default grace", event: { type: "result", subtype: "success", result: "done" }, graceMs: undefined, handleTerm: true, parentExitCode: 0, selfSignal: false, expectedSignal: null, expectedExit: 0, expectedError: null },
+    { name: "success when cleanup signals the waiting CLI", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: false, parentExitCode: null, selfSignal: false, expectedSignal: null, expectedExit: 0, expectedError: null },
+    { name: "success when the CLI signals itself before cleanup", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: false, parentExitCode: null, selfSignal: true, expectedSignal: null, expectedExit: 0, expectedError: null },
+    { name: "success with an earlier nonzero CLI exit", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: true, parentExitCode: 7, selfSignal: false, expectedSignal: null, expectedExit: 0, expectedError: null },
+    { name: "success with a trapped signal exit", event: { type: "result", subtype: "success", result: "done" }, graceMs: 100, handleTerm: true, parentExitCode: null, selfSignal: false, expectedSignal: null, expectedExit: 0, expectedError: null },
+    { name: "error result", event: { type: "result", subtype: "error", result: "failed" }, graceMs: 100, handleTerm: true, parentExitCode: null, selfSignal: false, expectedSignal: null, expectedExit: 143, expectedError: "failed" },
+    { name: "success marked as an error", event: { type: "result", subtype: "success", is_error: true, result: "failed" }, graceMs: 100, handleTerm: true, parentExitCode: null, selfSignal: false, expectedSignal: null, expectedExit: 143, expectedError: "failed" },
+    { name: "unspecified result status", event: { type: "result", result: "done" }, graceMs: 100, handleTerm: true, parentExitCode: null, selfSignal: false, expectedSignal: null, expectedExit: 143, expectedError: "Cursor exited with code 143" },
+  ])("stops a background sleep and preserves $name", async ({ event, graceMs, handleTerm, parentExitCode, selfSignal, expectedSignal, expectedExit, expectedError }) => {
+    setPrepareCursorSandboxCommand.mockReset();
+    setPrepareCursorSandboxCommand.mockImplementation(async (input) => ({
+      command: input.command, env: input.env, remoteSystemHomeDir: null,
+      addedPathEntry: null, preferredCommandPath: null,
+    }));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-cursor-lingering-"));
+    const command = path.join(root, "agent.sh");
+    const pidPath = path.join(root, "background.pid");
+    await fs.writeFile(command, `#!/bin/sh
+cat >/dev/null
+${handleTerm ? "trap 'exit 143' TERM" : ""}
+sleep 600 &
+background_pid=$!
+printf '%s' "$background_pid" > "$FIXTURE_PID_PATH"
+kill -0 "$background_pid" || exit 99
+printf '%s\\n' "$FIXTURE_RESULT"
+${selfSignal ? 'kill -TERM "$$"' : parentExitCode !== null ? `exit ${parentExitCode}` : 'wait "$background_pid"'}
+`, { mode: 0o755 });
+    let backgroundPid: number | null = null;
+    let aliveAtResult = false;
+    let resultReceivedAt = 0;
+    try {
+      const result = await execute({
+        runId: "run-cursor-terminal-cleanup",
+        agent: { id: "agent-1", companyId: "company-1", name: "Cursor", adapterType: "cursor", adapterConfig: {} },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: {
+          command, cwd: root, timeoutSec: 12, graceSec: 1, terminalResultCleanupGraceMs: graceMs,
+          env: { FIXTURE_PID_PATH: pidPath, FIXTURE_RESULT: JSON.stringify(event) },
+        },
+        context: createPromptContextFixture(), authToken: "fixture-run-token",
+        onLog: async (stream, chunk) => {
+          if (stream !== "stdout" || !chunk.includes('"type":"result"')) return;
+          resultReceivedAt = performance.now();
+          backgroundPid = Number(await fs.readFile(pidPath, "utf8"));
+          process.kill(backgroundPid, 0);
+          aliveAtResult = true;
+        },
+      });
+      const elapsedAfterResultMs = performance.now() - resultReceivedAt;
+      expect(aliveAtResult).toBe(true);
+      expect(elapsedAfterResultMs).toBeLessThan(10_000);
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(expectedExit);
+      expect(result.signal).toBe(expectedSignal);
+      expect(result.errorMessage).toBe(expectedError);
+      expect(result.resultJson?.unmanagedBackgroundTask).toEqual({
+        kind: "terminal_result_cleanup", stopped: true,
+        stopReason: "unmanaged_background_task_stopped",
+        reason: "unmanaged background task stopped; no durable live path",
+        terminalResultSeen: true, signal: "SIGTERM", forceKilled: false,
+        processExitCode: parentExitCode ?? (handleTerm ? 143 : null),
+        processSignal: handleTerm ? null : "SIGTERM",
+      });
+      await vi.waitFor(() => {
+        expect(() => process.kill(backgroundPid!, 0)).toThrowError();
+      }, { timeout: 1_000, interval: 10 });
+      console.info(JSON.stringify({
+        fixture: "cursor-background-sleep-600", subtype: event.type === "result" && "subtype" in event ? event.subtype : null,
+        backgroundPid, parentExitCode, selfSignal, graceMs: graceMs ?? 5_000, elapsedAfterResultMs,
+        backgroundAliveAtResult: aliveAtResult, backgroundAliveAfterCleanup: false,
+        exitCode: result.exitCode, cleanup: result.resultJson?.unmanagedBackgroundTask,
+      }));
+    } finally {
+      if (backgroundPid !== null) {
+        try { process.kill(backgroundPid, "SIGKILL"); } catch {}
+      }
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it.each([
+    { name: "ordinary success with a nonzero exit", event: { type: "result", subtype: "success", result: "done" }, processExit: 7, expectedExit: 7, expectedError: "Cursor exited with code 7" },
+    { name: "error result with a zero exit", event: { type: "result", subtype: "error", result: "failed" }, processExit: 0, expectedExit: 1, expectedError: "failed" },
+  ])("preserves $name without cleanup", async ({ event, processExit, expectedExit, expectedError }) => {
+    setPrepareCursorSandboxCommand.mockReset();
+    setPrepareCursorSandboxCommand.mockImplementation(async (input) => ({
+      command: input.command, env: input.env, remoteSystemHomeDir: null,
+      addedPathEntry: null, preferredCommandPath: null,
+    }));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-cursor-exit-"));
+    const command = path.join(root, "agent.sh");
+    await fs.writeFile(command, `#!/bin/sh
+cat >/dev/null
+printf '%s\\n' "$FIXTURE_RESULT"
+exit "$FIXTURE_EXIT"
+`, { mode: 0o755 });
+    try {
+      const result = await execute({
+        runId: "run-cursor-terminal-exit",
+        agent: { id: "agent-1", companyId: "company-1", name: "Cursor", adapterType: "cursor", adapterConfig: {} },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: { command, cwd: root, env: { FIXTURE_RESULT: JSON.stringify(event), FIXTURE_EXIT: String(processExit) } },
+        context: createPromptContextFixture(), authToken: "fixture-run-token", onLog: async () => {},
+      });
+      expect(result.exitCode).toBe(expectedExit);
+      expect(result.errorMessage).toBe(expectedError);
+      expect(result.resultJson?.unmanagedBackgroundTask).toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

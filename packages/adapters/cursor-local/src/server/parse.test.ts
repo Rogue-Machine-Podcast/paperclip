@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firstCursorDiagnosticLine } from "./parse.js";
+import { firstCursorDiagnosticLine, parseCursorJsonl } from "./parse.js";
 
 describe("Cursor diagnostic selection", () => {
   it("skips trace announcements with CRLF, whitespace and ANSI color", () => {
@@ -18,5 +18,25 @@ describe("Cursor diagnostic selection", () => {
   it("leaves no diagnostic when only a trace location was printed", () => {
     expect(firstCursorDiagnosticLine("cursor-retrieval: tracing to '/tmp/fixture.log'\n")).toBe("");
     expect(firstCursorDiagnosticLine("\n\r\n")).toBe("");
+  });
+});
+
+describe("Cursor terminal result status", () => {
+  it.each([
+    ['{"type":"result","subtype":"success"}', { subtype: "success", isError: false }],
+    ['{"type":"result","subtype":"success","is_error":true}', { subtype: "success", isError: true }],
+    ['{"type":"result","subtype":"error"}', { subtype: "error", isError: true }],
+    ['{"type":"result"}', { subtype: "", isError: false }],
+  ])("retains the explicit result status for %s", (stdout, terminalResult) => {
+    expect(parseCursorJsonl(stdout)).toMatchObject({ sawResult: true, terminalResult });
+  });
+
+  it.each([
+    '{"type":"assistant","message":{"text":"result"}}',
+    '{"type":"tool_call","result":{"type":"result"}}',
+    '{"type":"step_finish","part":{}}',
+    '{"type":"result"',
+  ])("does not treat nonterminal or partial output as a result for %s", (stdout) => {
+    expect(parseCursorJsonl(stdout)).toMatchObject({ sawResult: false, terminalResult: null });
   });
 });
