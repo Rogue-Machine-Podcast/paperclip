@@ -248,6 +248,7 @@ export interface ChatEndpoint {
   id: string;
   companyId: string;
   connectionId: string;
+  defaultProjectId?: string | null;
   /** Older clients omit these fields; defaults are automatic/restricted. */
   publicationMode?: ChannelPublicationMode;
   externalExecutionPolicy?: ExternalMessageExecutionPolicy;
@@ -511,6 +512,7 @@ export interface CreateChatEndpointInput {
 }
 
 export interface UpdateChatEndpointInput {
+  defaultProjectId?: string | null;
   slackSetupMethod?: "automatic" | "manual" | "existing";
   slackApp?: SlackAppConfiguration;
   communicationInstructions?: string;

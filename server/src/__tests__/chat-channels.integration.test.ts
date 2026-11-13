@@ -102,6 +102,7 @@ import {
   nativeRunFinalizations,
   environmentLeases,
   principalPermissionGrants,
+  projects,
   toolConnections,
 } from "@paperclipai/db";
 import { defaultGitHubReviewPolicy, type ChatProvider } from "@paperclipai/shared";
@@ -1729,6 +1730,128 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       throw new Error("Fake runtime did not receive endpoint callbacks");
     return { ...context, endpoint, callbacks };
   }
+
+  it("creates a Slack intake task in the endpoint default project", async () => {
+    const fixture = await seedCompany();
+    const context = await configuredSlackEndpoint(fixture);
+    const [project] = await db.insert(projects).values({
+      companyId: fixture.companyId, name: "Slack intake",
+    }).returning();
+    const app = routesApp(db, fixture.companyId, context.service);
+    const response = await request(app)
+      .patch(`/api/chat-endpoints/${context.endpoint.id}`)
+      .send({ defaultProjectId: project!.id });
+    expect(response.status).toBe(200);
+    expect(response.body.defaultProjectId).toBe(project!.id);
+
+    const { thread } = makeThread({
+      channelId: "D-DEFAULT-PROJECT", id: "slack:D-DEFAULT-PROJECT:9001.1", isDM: true,
+    });
+    await deliverMessage({
+      callbacks: context.callbacks, endpointId: context.endpoint.id, thread,
+      message: makeMessage({ id: "9001.1", text: "Plan the next recording" }),
+      trigger: "direct_message",
+    });
+    const created = await db.select().from(issues).where(eq(issues.companyId, fixture.companyId));
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({ projectId: project!.id, assigneeAgentId: fixture.assignedAgentId });
+  });
+
+  it("keeps Slack intake tasks projectless when the endpoint has no default project", async () => {
+    const fixture = await seedCompany();
+    const context = await configuredSlackEndpoint(fixture);
+    expect((await context.service.get(context.endpoint.id)).defaultProjectId).toBeNull();
+    const { thread } = makeThread({
+      channelId: "D-NO-PROJECT", id: "slack:D-NO-PROJECT:9002.1", isDM: true,
+    });
+    await deliverMessage({
+      callbacks: context.callbacks, endpointId: context.endpoint.id, thread,
+      message: makeMessage({ id: "9002.1", text: "Plan the next recording" }),
+      trigger: "direct_message",
+    });
+    const created = await db.select().from(issues).where(eq(issues.companyId, fixture.companyId));
+    expect(created).toHaveLength(1);
+    expect(created[0]!.projectId).toBeNull();
+  });
+
+  it("rejects an endpoint default project from another company without changing the endpoint", async () => {
+    const fixture = await seedCompany();
+    const other = await seedCompany();
+    const context = await configuredSlackEndpoint(fixture);
+    const [project] = await db.insert(projects).values({
+      companyId: other.companyId, name: "Other company's intake",
+    }).returning();
+    const response = await request(routesApp(db, fixture.companyId, context.service))
+      .patch(`/api/chat-endpoints/${context.endpoint.id}`)
+      .send({ defaultProjectId: project!.id, allowDirectMessages: false });
+    expect(response.status).toBe(422);
+    expect((await context.service.get(context.endpoint.id))).toMatchObject({
+      defaultProjectId: null, allowDirectMessages: true,
+    });
+  });
+
+  it("preserves an endpoint default project on unrelated updates and clears it with null", async () => {
+    const fixture = await seedCompany();
+    const context = await configuredSlackEndpoint(fixture);
+    const [project] = await db.insert(projects).values({
+      companyId: fixture.companyId, name: "Clearable intake",
+    }).returning();
+    const app = routesApp(db, fixture.companyId, context.service);
+    expect((await request(app).patch(`/api/chat-endpoints/${context.endpoint.id}`)
+      .send({ defaultProjectId: project!.id })).status).toBe(200);
+    const preserved = await request(app).patch(`/api/chat-endpoints/${context.endpoint.id}`)
+      .send({ allowGroupChats: true });
+    expect(preserved.status).toBe(200);
+    expect(preserved.body.defaultProjectId).toBe(project!.id);
+    const cleared = await request(app).patch(`/api/chat-endpoints/${context.endpoint.id}`)
+      .send({ defaultProjectId: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.defaultProjectId).toBeNull();
+  });
+
+  it("clears an endpoint default project when the project is deleted", async () => {
+    const fixture = await seedCompany();
+    const context = await configuredSlackEndpoint(fixture);
+    const [project] = await db.insert(projects).values({
+      companyId: fixture.companyId, name: "Temporary intake",
+    }).returning();
+    const response = await request(routesApp(db, fixture.companyId, context.service))
+      .patch(`/api/chat-endpoints/${context.endpoint.id}`)
+      .send({ defaultProjectId: project!.id });
+    expect(response.status).toBe(200);
+    await db.delete(projects).where(eq(projects.id, project!.id));
+    expect((await context.service.get(context.endpoint.id)).defaultProjectId).toBeNull();
+  });
+
+  it("uses the current endpoint default project when Slack intake reaches task creation", async () => {
+    const fixture = await seedCompany();
+    const [initialProject, currentProject] = await db.insert(projects).values([
+      { companyId: fixture.companyId, name: "Original intake" },
+      { companyId: fixture.companyId, name: "Current intake" },
+    ]).returning();
+    let changeDefault: (() => Promise<void>) | undefined;
+    const context = await configuredSlackEndpoint(fixture, {
+      reachAuthorizationBarrier: async () => { await changeDefault?.(); },
+    });
+    const app = routesApp(db, fixture.companyId, context.service);
+    expect((await request(app).patch(`/api/chat-endpoints/${context.endpoint.id}`)
+      .send({ defaultProjectId: initialProject!.id })).status).toBe(200);
+    changeDefault = async () => {
+      changeDefault = undefined;
+      await context.service.update(context.endpoint.id, { defaultProjectId: currentProject!.id }, "owner-user");
+    };
+    const { thread } = makeThread({
+      channelId: "D-CURRENT-PROJECT", id: "slack:D-CURRENT-PROJECT:9003.1", isDM: true,
+    });
+    await deliverMessage({
+      callbacks: context.callbacks, endpointId: context.endpoint.id, thread,
+      message: makeMessage({ id: "9003.1", text: "Plan the next recording" }),
+      trigger: "direct_message",
+    });
+    const created = await db.select().from(issues).where(eq(issues.companyId, fixture.companyId));
+    expect(created).toHaveLength(1);
+    expect(created[0]!.projectId).toBe(currentProject!.id);
+  });
 
   async function acceptedUnknownSlackFileReceipt(label: string) {
     const fixture = await seedCompany();
