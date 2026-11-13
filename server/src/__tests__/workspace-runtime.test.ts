@@ -1664,11 +1664,86 @@ process.stderr.write(${JSON.stringify(stderr)}, () => { process.exitCode = ${cod
       },
     });
 
-    expect(realized.branchName).toBe(
-      "PAP-991-there-should-be-a-setting-for-the-allowance-of-thumbs-up-thumbs-down-data-rm-rf",
-    );
+    expect(realized.branchName).toBe("PAP-991-there-should-be-a-setting-for-t-ce1a9115");
     expect(realized.branchName?.includes("/")).toBe(false);
     expect(path.basename(realized.cwd)).toBe(realized.branchName);
+  });
+
+  it("caps long title-derived branch names with a hash so worktree folders stay short", async () => {
+    const repoRoot = await createTempRepo();
+    const title =
+      "Case room v3.1: prove an evidence export survives restore, re-index and projection with every source file still attached";
+    expect(title).toHaveLength(120);
+
+    const realized = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+        },
+      },
+      issue: {
+        id: "issue-long-title",
+        identifier: "ROG-9999",
+        title,
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    expect(realized.branchName).toBe("ROG-9999-case-room-v3-1-prove-an-eviden-6e64171e");
+    expect(path.basename(realized.cwd)).toBe("ROG-9999-case-room-v3-1-prove-an-eviden-6e64171e");
+    await expect(readGit(realized.cwd, ["rev-parse", "--abbrev-ref", "HEAD"])).resolves.toBe(
+      "ROG-9999-case-room-v3-1-prove-an-eviden-6e64171e",
+    );
+  });
+
+  it("keeps an existing uncapped branch for long titles created before the cap", async () => {
+    const repoRoot = await createTempRepo();
+    const uncappedBranch =
+      "PAP-993-keep-working-on-the-branch-this-task-already-had-before-the-cap";
+    await runGit(repoRoot, ["branch", uncappedBranch]);
+
+    const realized = await realizeExecutionWorkspace({
+      base: {
+        baseCwd: repoRoot,
+        source: "project_primary",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        repoUrl: null,
+        repoRef: "HEAD",
+      },
+      config: {
+        workspaceStrategy: {
+          type: "git_worktree",
+          branchTemplate: "{{issue.identifier}}-{{slug}}",
+        },
+      },
+      issue: {
+        id: "issue-legacy-long",
+        identifier: "PAP-993",
+        title: "Keep working on the branch this task already had before the cap",
+      },
+      agent: {
+        id: "agent-1",
+        name: "Codex Coder",
+        companyId: "company-1",
+      },
+    });
+
+    expect(realized.branchName).toBe(uncappedBranch);
+    expect(path.basename(realized.cwd)).toBe(uncappedBranch);
   });
 
   it("preserves intentional slashes and dots from the branch template", async () => {
